@@ -1,0 +1,181 @@
+{
+  "seed": 42,
+  "train": {
+    "epochs": 1,
+    "batch_size": 128,
+    "reference_device_count": 4,
+    "per_device_batch_size": 32,
+    "auto_scale_batch_by_device_count": true,
+    "data_parallel": true,
+    "learning_rate": 1e-5,
+    "host_prefetch_size": 64,
+    "host_prefetch_per_device": 8,
+    "device_prefetch_size": 16,
+    "device_prefetch_per_device": 2,
+    "grad_clip": 1.0,
+    "log_every_steps": 500,
+    "codebook_stats_every_steps": 2500,
+    "loss": {
+      "pa_l1_scale": 50.0
+    },
+    "loss_weights": {
+      "time_l1": 0.0,
+      "pa_l1": 1.0,
+      "diff1_l1": 0.25,
+      "diff2_l1": 0.05,
+      "small_stft_logmag_l1": 0.05,
+      "medium_stft_logmag_l1": 0.05,
+      "large_stft_logmag_l1": 0.05,
+      "complex_stft_l1": 0.03,
+      "lowpass_l1_200hz": 0.05,
+      "lowpass_l1_500hz": 0.05,
+      "lowpass_l1_1000hz": 0.025,
+      "residual_energy_l2": 0.02
+    },
+    "stft_loss": {
+      "scales": [
+        {
+          "n_fft": 128,
+          "win_length": 128,
+          "hop_length": 24
+        },
+        {
+          "n_fft": 512,
+          "win_length": 512,
+          "hop_length": 128
+        },
+        {
+          "n_fft": 1024,
+          "win_length": 1024,
+          "hop_length": 256
+        }
+      ]
+    }
+  },
+  "model": {
+    "variant": "foundation_v1",
+    "enc_channels": [
+      32,
+      64,
+      128,
+      256,
+      512
+    ],
+    "enc_down_strides": [
+      2,
+      2,
+      2,
+      3
+    ],
+    "enc_stage_num_res_blocks": [
+      2,
+      2,
+      3,
+      3
+    ],
+    "enc_kernel_size": 7,
+    "latent_dim": 512,
+    "quantizer_dim": 512,
+    "codebook_size": 65536,
+    "dec_channels": [
+      512
+    ],
+    "decoder_dim": 768,
+    "decoder_intermediate_dim": 2304,
+    "decoder_num_layers": 12,
+    "decoder_pos_net_enabled": true,
+    "decoder_pos_net_dropout": 0.0,
+    "decoder_pos_net_attention_heads": 12,
+    "decoder_pos_net_attention_backend": "jax_cudnn",
+    "istft_n_fft": 512,
+    "istft_hop_length": 24,
+    "istft_sample_rate": 5000,
+    "istft_band_edges_hz": [
+      200,
+      500,
+      1000
+    ],
+    "istft_band_gain_init": [
+      1.0,
+      0.8,
+      0.45,
+      0.12
+    ],
+    "istft_dynamic_gate_scale": 0.5,
+    "residual_correction": {
+      "enabled": true,
+      "alpha_init": 0.0,
+      "alpha_max": 0.1,
+      "hidden_dim": 192
+    },
+    "latent_bilstm_layers": 2,
+    "latent_bilstm_hidden_dim": 256,
+    "cnn_compute_dtype": "fp32",
+    "param_dtype": "fp32",
+    "diveq_sigma2": 0.001,
+    "search_chunk_size": 2048,
+    "quant_conv_kernel_size": 7,
+    "post_quant_conv_kernel_size": 7
+  },
+  "data": {
+    "type": "pod5",
+    "root": "/data/nanopore/hereditary_cancer_2025.09/raw",
+    "segment_sec": 1.2288,
+    "segment_samples": 6144,
+    "segment_hop_samples": 6144,
+    "sample_rate": 5000,
+    "reference_device_count": 4,
+    "subdirs": [
+      "FC01/pod5"
+    ],
+    "loader_workers": 32,
+    "loader_workers_per_device": 4,
+    "loader_prefetch_chunks": 4096,
+    "loader_prefetch_chunks_per_device": 512,
+    "auto_scale_loader_by_device_count": true,
+    "return_metadata": true,
+    "pad_short_reads": true,
+    "min_read_length_for_pad": 2048,
+    "tail_chunk_mode": "pad_last",
+    "tail_min_valid_samples": 2048,
+    "tail_min_valid_ratio": 0.33,
+    "max_padded_tail_fraction": 0.2,
+    "train": {
+      "root": "/data/nanopore/hereditary_cancer_2025.09/raw",
+      "subdirs": [
+        "FC01/pod5"
+      ],
+      "segment_samples": 6144,
+      "segment_hop_samples": 6144,
+      "pad_short_reads": true,
+      "min_read_length_for_pad": 2048,
+      "tail_chunk_mode": "pad_last",
+      "tail_min_valid_samples": 2048,
+      "tail_min_valid_ratio": 0.33,
+      "max_padded_tail_fraction": 0.2,
+      "return_metadata": true
+    }
+  },
+  "checkpoint": {
+    "root_dir": "checkpoints/Foundation",
+    "resume_from": null,
+    "every_steps": 10000
+  },
+  "logging": {
+    "wandb": {
+      "enabled": true,
+      "project": "Nanopore Reconstruction",
+      "run_name": "offline"
+    }
+  },
+  "optim": {
+    "lr_multipliers": {
+      "encoder": 1.0,
+      "decoder": 1.0,
+      "quant_conv": 1.0,
+      "post_quant_conv": 1.0,
+      "quantizer_W": 1.0,
+      "quantizer_proj_bias": 1.0
+    }
+  }
+}
