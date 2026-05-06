@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Unio
 import numpy as np
 import pod5 as p5
 
-from .normalization import normalize_to_pm1_with_stats
+from .normalization import NORMALIZATION_MINMAX_PM1, normalize_mode, normalize_signal_with_stats
 from .pod5_processing import (
     parse_calibration,
     resolve_sample_rate,
@@ -26,10 +26,21 @@ def _calibrate_read_signal(signal: np.ndarray, calibration: Any) -> tuple[np.nda
     return cal.to_picoamps(signal), cal
 
 
-def _normalize_chunk_signal(chunk: np.ndarray) -> tuple[np.ndarray, NormalizationStats]:
-    """Normalize a single chunk to [-1, 1] and keep reversible stats."""
-    normalized, center, half_range = normalize_to_pm1_with_stats(chunk)
-    return normalized, NormalizationStats(center=center, half_range=half_range)
+def _normalize_chunk_signal(
+    chunk: np.ndarray,
+    *,
+    mode: str = NORMALIZATION_MINMAX_PM1,
+    mean: float | None = None,
+    std: float | None = None,
+) -> tuple[np.ndarray, NormalizationStats]:
+    """Normalize a single chunk and keep reversible center/scale stats."""
+    normalized, center, scale = normalize_signal_with_stats(
+        chunk,
+        mode=mode,
+        mean=mean,
+        std=std,
+    )
+    return normalized, NormalizationStats(center=center, half_range=scale)
 
 
 def _reflect_pad_right_1d(values: np.ndarray, target_length: int) -> np.ndarray:
@@ -63,9 +74,10 @@ def _should_skip_pod5(exc: Exception) -> bool:
 """POD5 dataset utilities.
 
 Each read is streamed from POD5, converted to picoamps via calibration, sliced
-into fixed windows, and then each chunk is normalized independently to [-1, 1]
-using its own center/half-range statistics. Sample-rate hints stored in POD5 are preferred,
-falling back to configured defaults only when metadata is absent.
+into fixed windows, and then normalized. The default remains per-chunk min-max
+normalization to [-1, 1], while configs can opt into fixed global z-score
+normalization. Sample-rate hints stored in POD5 are preferred, falling back to
+configured defaults only when metadata is absent.
 """
 
 
@@ -83,6 +95,9 @@ class NanoporeSignalDataset:
     max_padded_tail_fraction: float = 1.0
     sample_rate_hz_default: Optional[float] = None
     return_metadata: bool = False
+    normalization_mode: str = NORMALIZATION_MINMAX_PM1
+    normalization_mean: Optional[float] = None
+    normalization_std: Optional[float] = None
     read_ids_per_file: Optional[Dict[Path, Sequence[str]]] = None
     loader_workers: int = 1
     loader_prefetch_chunks: int = 128
@@ -108,6 +123,9 @@ class NanoporeSignalDataset:
         max_padded_tail_fraction: float = 1.0,
         sample_rate_hz_default: Optional[float] = None,
         return_metadata: bool = False,
+        normalization_mode: str = NORMALIZATION_MINMAX_PM1,
+        normalization_mean: Optional[float] = None,
+        normalization_std: Optional[float] = None,
         read_ids_per_file: Optional[Dict[Union[str, Path], Sequence[str]]] = None,
         loader_workers: int = 1,
         loader_prefetch_chunks: int = 128,
@@ -136,6 +154,16 @@ class NanoporeSignalDataset:
             raise ValueError(
                 f"Unsupported tail_chunk_mode={tail_chunk_mode!r}; choose from ['drop', 'shift_last', 'pad_last']"
             )
+        norm_mode = normalize_mode(normalization_mode)
+        norm_mean: Optional[float] = None if normalization_mean is None else float(normalization_mean)
+        norm_std: Optional[float] = None if normalization_std is None else float(normalization_std)
+        if norm_mode != NORMALIZATION_MINMAX_PM1:
+            normalize_signal_with_stats(
+                np.asarray([], dtype=np.float32),
+                mode=norm_mode,
+                mean=norm_mean,
+                std=norm_std,
+            )
         return cls(
             pod5_files=paths,
             window_ms=int(window_ms),
@@ -149,6 +177,9 @@ class NanoporeSignalDataset:
             max_padded_tail_fraction=max(0.0, min(1.0, float(max_padded_tail_fraction))),
             sample_rate_hz_default=sample_rate_hz_default,
             return_metadata=bool(return_metadata),
+            normalization_mode=norm_mode,
+            normalization_mean=norm_mean,
+            normalization_std=norm_std,
             read_ids_per_file=rid_map,
             loader_workers=workers,
             loader_prefetch_chunks=prefetch_chunks,
@@ -185,7 +216,12 @@ class NanoporeSignalDataset:
             valid_length = int(real.shape[0])
         valid_length = max(0, min(int(valid_length), int(real.shape[0])))
         real_part = real[:valid_length]
-        arr, stats = _normalize_chunk_signal(real_part)
+        arr, stats = _normalize_chunk_signal(
+            real_part,
+            mode=self.normalization_mode,
+            mean=self.normalization_mean,
+            std=self.normalization_std,
+        )
         arr = np.asarray(arr, dtype=np.float32)
         if valid_length < chunk_size:
             arr = _reflect_pad_right_1d(arr, chunk_size)

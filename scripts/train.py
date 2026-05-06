@@ -170,6 +170,21 @@ def _merge_split_cfg(base: Dict[str, Any], override: Dict[str, Any] | None) -> D
     return merged
 
 
+def _normalization_kwargs(split_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    norm_cfg = split_cfg.get("normalization")
+    if norm_cfg is None:
+        return {}
+    if isinstance(norm_cfg, str):
+        norm_cfg = {"mode": norm_cfg}
+    if not isinstance(norm_cfg, dict):
+        raise ValueError("data.normalization must be a string or object.")
+    return {
+        "normalization_mode": norm_cfg.get("mode", "minmax_pm1"),
+        "normalization_mean": norm_cfg.get("mean", norm_cfg.get("pa_mean")),
+        "normalization_std": norm_cfg.get("std", norm_cfg.get("stdev", norm_cfg.get("pa_std"))),
+    }
+
+
 def _collect_files_for_spec(
     *,
     split_cfg: Dict[str, Any],
@@ -206,6 +221,7 @@ def _build_dataset(
     )
     return_metadata = bool(cfg.get("return_metadata", False))
     tail_chunk_mode = str(cfg.get("tail_chunk_mode", "shift_last")).strip().lower() or "shift_last"
+    normalization_kwargs = _normalization_kwargs(cfg)
     return NanoporeSignalDataset.from_paths(
         files,
         window_ms=window_ms,
@@ -219,6 +235,7 @@ def _build_dataset(
         max_padded_tail_fraction=float(cfg.get("max_padded_tail_fraction", 1.0)),
         sample_rate_hz_default=sample_rate,
         return_metadata=return_metadata,
+        **normalization_kwargs,
         loader_workers=loader_workers,
         loader_prefetch_chunks=loader_prefetch,
     )
@@ -536,6 +553,8 @@ def main() -> None:
             "loader_prefetch_chunks": max(1, default_loader_prefetch),
             "return_metadata": wants_metadata,
         }
+        if "normalization" in data_cfg:
+            base_data_cfg["normalization"] = data_cfg.get("normalization")
         if args.loader_workers is not None:
             base_data_cfg["loader_workers"] = max(1, int(args.loader_workers))
         if args.loader_prefetch is not None:
@@ -554,6 +573,7 @@ def main() -> None:
             f"effective_devices={scale_devices}, "
             f"batch_size={batch_size}, "
             f"tail_chunk_mode={str(train_spec.get('tail_chunk_mode', 'shift_last'))}, "
+            f"normalization={_normalization_kwargs(train_spec).get('normalization_mode', 'minmax_pm1')}, "
             f"loader_workers={train_spec['loader_workers']}, "
             f"loader_prefetch_chunks={train_spec['loader_prefetch_chunks']}, "
             f"host_prefetch_size={host_prefetch_size}, "
