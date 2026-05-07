@@ -16,7 +16,12 @@ try:
 except Exception as exc:  # pragma: no cover - depends on runtime environment
     raise SystemExit(f"pod5 library not available: {exc}") from exc
 
-from codec.data.normalization import normalize_to_pm1_with_stats
+from codec.data.normalization import (
+    NORMALIZATION_GLOBAL_ZSCORE,
+    NORMALIZATION_MINMAX_PM1,
+    normalize_mode,
+    normalize_signal_with_stats,
+)
 from codec.data.pod5_processing import CalibrationParams, NormalizationStats, denormalize_to_adc, parse_calibration
 from codec.data.pod5_processing import normalize_adc_signal
 from codec.models import build_audio_model
@@ -97,6 +102,32 @@ class SourceChunkSpec:
     sample_rate_hz: float
 
 
+@dataclass(frozen=True)
+class ReconstructionNormalization:
+    mode: str = NORMALIZATION_MINMAX_PM1
+    mean: float | None = None
+    std: float | None = None
+
+    def __post_init__(self) -> None:
+        resolved_mode = normalize_mode(self.mode)
+        object.__setattr__(self, "mode", resolved_mode)
+        if resolved_mode == NORMALIZATION_GLOBAL_ZSCORE:
+            if self.mean is None or self.std is None:
+                raise ValueError("global_zscore reconstruction normalization requires both mean and std.")
+            mean = float(self.mean)
+            std = float(self.std)
+            normalize_signal_with_stats(np.asarray([], dtype=np.float32), mode=resolved_mode, mean=mean, std=std)
+            object.__setattr__(self, "mean", mean)
+            object.__setattr__(self, "std", std)
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "mean": None if self.mean is None else float(self.mean),
+            "std": None if self.std is None else float(self.std),
+        }
+
+
 def to_host_tree(tree: Any) -> Any:
     return jax.device_get(tree)
 
@@ -172,9 +203,39 @@ def resolve_split_cfg(config: dict[str, Any], split_name: str) -> dict[str, Any]
         "segment_hop_samples": data_cfg.get("segment_hop_samples"),
         "sample_rate": float(data_cfg.get("sample_rate", 5000.0)),
     }
+    if "normalization" in data_cfg:
+        base_cfg["normalization"] = data_cfg.get("normalization")
     split_cfg = merge_split_cfg(base_cfg, data_cfg.get(split_name))
     split_cfg["root"] = str(resolve_data_path(split_cfg.get("root"), cfg_dir))
     return split_cfg
+
+
+def resolve_reconstruction_normalization(config: dict[str, Any], split_name: str) -> ReconstructionNormalization:
+    split_cfg = resolve_split_cfg(config, split_name)
+    norm_cfg = split_cfg.get("normalization")
+    if norm_cfg is None:
+        return ReconstructionNormalization()
+    if isinstance(norm_cfg, str):
+        return ReconstructionNormalization(mode=norm_cfg)
+    if not isinstance(norm_cfg, dict):
+        raise ValueError("data.normalization must be a string or object.")
+    return ReconstructionNormalization(
+        mode=norm_cfg.get("mode", NORMALIZATION_MINMAX_PM1),
+        mean=norm_cfg.get("mean", norm_cfg.get("pa_mean")),
+        std=norm_cfg.get("std", norm_cfg.get("stdev", norm_cfg.get("pa_std"))),
+    )
+
+
+def normalize_reconstruction_chunk(
+    chunk_pa: np.ndarray,
+    normalization: ReconstructionNormalization,
+) -> tuple[np.ndarray, float, float]:
+    return normalize_signal_with_stats(
+        chunk_pa,
+        mode=normalization.mode,
+        mean=normalization.mean,
+        std=normalization.std,
+    )
 
 
 def resolve_split_files(config: dict[str, Any], split_name: str) -> list[Path]:
@@ -575,7 +636,9 @@ def load_prepared_reads(
     segment_samples: int,
     hop_samples: int,
     recon_mode: str,
+    normalization: ReconstructionNormalization | None = None,
 ) -> tuple[list[ReconstructionRead], list[ChunkSpec], np.ndarray]:
+    normalization = normalization or ReconstructionNormalization()
     reads: list[ReconstructionRead] = []
     chunk_specs: list[ChunkSpec] = []
     chunks: list[np.ndarray] = []
@@ -624,7 +687,7 @@ def load_prepared_reads(
             for chunk_index, start in enumerate(starts):
                 stop = start + int(segment_samples)
                 chunk_pa = np.asarray(trimmed_pa[start:stop], dtype=np.float32)
-                normalized, center, half_range = normalize_to_pm1_with_stats(chunk_pa)
+                normalized, center, half_range = normalize_reconstruction_chunk(chunk_pa, normalization)
                 chunks.append(np.asarray(normalized, dtype=np.float32))
                 chunk_specs.append(
                     ChunkSpec(
@@ -649,7 +712,9 @@ def load_prepared_reads_shift_last(
     segment_samples: int,
     hop_samples: int,
     recon_mode: str,
+    normalization: ReconstructionNormalization | None = None,
 ) -> tuple[list[ReconstructionRead], list[ChunkSpec], np.ndarray]:
+    normalization = normalization or ReconstructionNormalization()
     reads: list[ReconstructionRead] = []
     chunk_specs: list[ChunkSpec] = []
     chunks: list[np.ndarray] = []
@@ -704,7 +769,7 @@ def load_prepared_reads_shift_last(
             reads.append(state)
             for chunk_index, window in enumerate(windows):
                 chunk_pa = np.asarray(signal_pa[window.start : window.stop], dtype=np.float32)
-                normalized, center, half_range = normalize_to_pm1_with_stats(chunk_pa)
+                normalized, center, half_range = normalize_reconstruction_chunk(chunk_pa, normalization)
                 chunks.append(np.asarray(normalized, dtype=np.float32))
                 chunk_specs.append(
                     ChunkSpec(
@@ -729,7 +794,9 @@ def load_prepared_reads_pad_last(
     segment_samples: int,
     hop_samples: int,
     recon_mode: str,
+    normalization: ReconstructionNormalization | None = None,
 ) -> tuple[list[ReconstructionRead], list[ChunkSpec], np.ndarray]:
+    normalization = normalization or ReconstructionNormalization()
     reads: list[ReconstructionRead] = []
     chunk_specs: list[ChunkSpec] = []
     chunks: list[np.ndarray] = []
@@ -778,7 +845,7 @@ def load_prepared_reads_pad_last(
             for chunk_index, window in enumerate(windows):
                 valid_stop = min(int(window.start + window.valid_length), int(raw.size))
                 chunk_pa = np.asarray(signal_pa[window.start:valid_stop], dtype=np.float32)
-                normalized, center, half_range = normalize_to_pm1_with_stats(chunk_pa)
+                normalized, center, half_range = normalize_reconstruction_chunk(chunk_pa, normalization)
                 if int(window.valid_length) < int(segment_samples):
                     normalized = reflect_pad_right_1d(normalized, segment_samples)
                 chunks.append(np.asarray(normalized, dtype=np.float32))

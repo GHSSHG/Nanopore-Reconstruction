@@ -48,6 +48,7 @@ from valid.pod5_reconstruct import (  # noqa: E402
     load_prepared_reads_pad_last,
     load_prepared_reads_shift_last,
     reconstruction_per_read_metrics,
+    resolve_reconstruction_normalization,
     resolve_recon_hop,
     resolve_segment_hop_samples,
     resolve_segment_samples,
@@ -224,6 +225,7 @@ def _prepare_reconstruction(
     segment_samples = resolve_segment_samples(config, split)
     configured_hop_samples = resolve_segment_hop_samples(config, split)
     hop_samples = resolve_recon_hop(recon_mode, segment_samples, configured_hop_samples, hop_override)
+    normalization = resolve_reconstruction_normalization(config, split)
 
     pod5_dir = output_dir / "pod5"
     metrics_dir = output_dir / "metrics"
@@ -253,6 +255,7 @@ def _prepare_reconstruction(
             segment_samples=segment_samples,
             hop_samples=hop_samples,
             recon_mode=recon_mode,
+            normalization=normalization,
         )
     elif tail_chunk_mode == "pad_last":
         prepared_reads, chunk_specs, chunk_inputs = load_prepared_reads_pad_last(
@@ -260,6 +263,7 @@ def _prepare_reconstruction(
             segment_samples=segment_samples,
             hop_samples=hop_samples,
             recon_mode=recon_mode,
+            normalization=normalization,
         )
     else:
         prepared_reads, chunk_specs, chunk_inputs = load_prepared_reads(
@@ -267,6 +271,7 @@ def _prepare_reconstruction(
             segment_samples=segment_samples,
             hop_samples=hop_samples,
             recon_mode=recon_mode,
+            normalization=normalization,
         )
     reconstructor = CheckpointReconstructor(
         model_cfg=dict(config.get("model") or {}),
@@ -309,6 +314,7 @@ def _prepare_reconstruction(
         "required_recon_device_count": int(VALID_RECON_DEVICE_COUNT),
         "trim_mode": trim_mode,
         "tail_chunk_mode": tail_chunk_mode,
+        "reconstruction_normalization": normalization.summary(),
         "model_apply_mode": DIVEQ_VALID_MODEL_APPLY_MODE,
         "model_apply_train": True,
         "model_apply_rng_seed": int(DIVEQ_VALID_RNG_SEED),
