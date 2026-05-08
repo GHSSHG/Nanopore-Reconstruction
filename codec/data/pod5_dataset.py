@@ -209,6 +209,7 @@ class NanoporeSignalDataset:
         cal: CalibrationParams,
         valid_length: int | None = None,
         is_padded_tail: bool = False,
+        count_padded_tail_limit: bool = False,
     ) -> Any:
         real = np.asarray(chunk, dtype=np.float32).reshape(-1)
         chunk_size = int(self.window_samples) if self.window_samples is not None else int(real.shape[0])
@@ -227,7 +228,7 @@ class NanoporeSignalDataset:
             arr = _reflect_pad_right_1d(arr, chunk_size)
         valid_mask = np.zeros((chunk_size,), dtype=np.float32)
         valid_mask[:valid_length] = 1.0
-        self._record_emitted_chunk(is_padded_tail=is_padded_tail)
+        self._record_emitted_chunk(is_padded_tail=count_padded_tail_limit)
         if not self.return_metadata:
             return arr
         return (arr, stats, cal, valid_mask, int(valid_length), bool(is_padded_tail))
@@ -315,6 +316,7 @@ class NanoporeSignalDataset:
                                     cal=cal,
                                     valid_length=n,
                                     is_padded_tail=True,
+                                    count_padded_tail_limit=False,
                                 )
                             continue
                         last_full_start = n - chunk_size
@@ -341,6 +343,7 @@ class NanoporeSignalDataset:
                                         cal=cal,
                                         valid_length=tail_valid,
                                         is_padded_tail=True,
+                                        count_padded_tail_limit=True,
                                     )
                     except Exception as read_exc:
                         if _should_skip_pod5(read_exc):
