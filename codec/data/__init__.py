@@ -1,5 +1,4 @@
 from .pod5_dataset import NanoporeSignalDataset
-from .posttrain_dataset import PosttrainShardDataset
 from .prefetch import Prefetcher, make_device_prefetcher
 from .pod5_processing import (
     CalibrationParams,
@@ -13,7 +12,6 @@ from .pod5_processing import (
 
 __all__ = [
     "NanoporeSignalDataset",
-    "PosttrainShardDataset",
     "Prefetcher",
     "make_device_prefetcher",
     "CalibrationParams",

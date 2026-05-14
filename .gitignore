@@ -1,0 +1,12 @@
+__pycache__
+*.py[cod]
+.pytest_cache/
+checkpoints
+wandb
+AGENTS.md
+tmp
+valid
+data
+.DS_Store
+.env
+.venv

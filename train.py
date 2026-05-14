@@ -11,8 +11,8 @@ from typing import Any, Dict
 from argparse import BooleanOptionalAction
 
 import sys
-# 确保以 "python scripts/train.py" 运行时可导入项目根下的 `codec` 包
-_ROOT = Path(__file__).resolve().parent.parent
+
+_ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
@@ -20,7 +20,6 @@ from codec.runtime import configure_runtime_env, enable_jax_compilation_cache
 
 configure_runtime_env()
 
-# 启用 TF32（"high"）提升 A100 张量核吞吐
 try:
     from jax import config as _jax_config  # type: ignore
     _jax_config.update("jax_default_matmul_precision", "high")
@@ -43,8 +42,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--config",
         type=Path,
-        default=_ROOT / "configs" / "Foundation" / "offline.json",
-        help="Path to training config JSON (default: configs/Foundation/offline.json)",
+        default=_ROOT / "configs" / "offline-high.json",
+        help="Path to training config JSON (default: configs/offline-high.json)",
     )
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--epochs", type=int, default=None)
@@ -100,7 +99,15 @@ def parse_args() -> argparse.Namespace:
 def _resolve_data_path(path_value: str | os.PathLike[str] | None, cfg_dir: Path) -> str:
     if path_value is None:
         return str(cfg_dir)
-    candidate = Path(path_value).expanduser()
+    expanded = os.path.expandvars(str(path_value))
+    unresolved = [name for name in ("DATA_PATH", "data_path") if f"${{{name}}}" in expanded]
+    if unresolved:
+        raise ValueError(
+            "Dataset path contains an unresolved environment variable. "
+            "Set DATA_PATH to the directory that contains hereditary_cancer_2025.09, "
+            "or edit data.root in the config."
+        )
+    candidate = Path(expanded).expanduser()
     if not candidate.is_absolute():
         candidate = (cfg_dir / candidate).resolve()
     else:
@@ -323,10 +330,9 @@ def _scale_by_devices(
 def main() -> None:
     args = parse_args()
     if args.config is not None:
-        # 兼容：若传入相对路径，则相对项目根目录解析；优先绝对路径
         cfg_path = Path(args.config)
         if not cfg_path.is_absolute():
-            root_guess = Path(__file__).resolve().parent.parent / cfg_path
+            root_guess = _ROOT / cfg_path
             cfg_path = root_guess.resolve()
         cfg = json.loads(cfg_path.read_text())
         cfg_dir = cfg_path.parent

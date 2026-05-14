@@ -21,7 +21,6 @@ def normalize_mode(mode: str | None) -> str:
         "zscore": NORMALIZATION_GLOBAL_ZSCORE,
         "sup": NORMALIZATION_GLOBAL_ZSCORE,
         "sup_zscore": NORMALIZATION_GLOBAL_ZSCORE,
-        "dorado_zscore": NORMALIZATION_GLOBAL_ZSCORE,
     }
     if text not in aliases:
         raise ValueError(
