@@ -14,7 +14,7 @@ codec/
   jaxlayers/  Small Flax/JAX layer helpers
   models/     Encoder, decoder, quantizer, and model factory
   train/      Reconstruction losses, train state, train step, and loop
-  utils/      File discovery, random seeds, and optional W&B logging
+  utils/      File discovery, random seeds, and W&B logging
 configs/
   offline-high.json
 train.py
@@ -35,8 +35,8 @@ pip install -r requirements.txt
 
 <https://docs.jax.dev/en/latest/installation.html>
 
-Weights & Biases support is optional. The public config disables W&B by default.
-Install `wandb` separately only if you enable W&B logging.
+The config enables Weights & Biases logging (`logging.wandb.enabled`). Install `wandb` and log in
+(`wandb login`), or set `logging.wandb.enabled` to `false`.
 
 ## Dataset
 
@@ -48,6 +48,10 @@ hereditary_cancer_2025.09/
     FC01/
       pod5/
         *.pod5
+    FC02/
+      pod5/
+    FC03/
+      pod5/
 ```
 
 Dataset source:
@@ -67,7 +71,7 @@ export DATA_PATH=/path/to/datasets
 python train.py --config configs/offline-high.json
 ```
 
-For example, the loader will read POD5 files from `${DATA_PATH}/hereditary_cancer_2025.09/raw/FC01/pod5`. The actual dataset subpath `FC01/pod5` is preserved because it is part of the dataset layout.
+The loader reads the POD5 files of `FC01/pod5`, `FC02/pod5` and `FC03/pod5` under `${DATA_PATH}/hereditary_cancer_2025.09/raw` (one epoch over all three flow cells, files in a seeded random order).
 
 The dataset files themselves are not included in this repository.
 
@@ -138,7 +142,7 @@ which is ignored by Git. Training refuses to start in a non-empty checkpoint dir
 - Data: files are visited in a seeded random order each epoch, `data.files_in_flight` files at a
   time, and windows pass through a shuffle buffer of `data.shuffle_buffer` chunks; one background
   thread prepares the batches.
-- The public config defaults to `logging.wandb.enabled=false`; enable W&B with `--wandb`.
+- W&B logging is on in the config (`logging.wandb`); the run name also names the checkpoint directory.
 - Do not commit credentials or machine-specific dataset roots.
 - The model is trained on 8192-sample chunks at 5000 Hz.
 
