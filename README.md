@@ -1,6 +1,6 @@
 # NanoRecon
 
-NanoRecon is a Flax/JAX implementation of the trained SimVQ nanopore signal reconstruction model used in this repository. The public repository is intentionally reduced to the model code, one training configuration, and one training entrypoint.
+NanoRecon is a Flax/JAX implementation of the SimVQ nanopore signal reconstruction model. The public repository is intentionally reduced to the model code, one training configuration, and one training entrypoint.
 
 Trained inference weights are available on Hugging Face:
 
@@ -71,78 +71,32 @@ For example, the loader will read POD5 files from `${DATA_PATH}/hereditary_cance
 
 The dataset files themselves are not included in this repository.
 
-## Download The Released Model
+## Quantization
 
-Download the inference-ready weights from the Hugging Face model page:
+The quantizer always outputs the nearest projected codeword (exact nearest-neighbour search,
+the same fused GPU kernel as the NanoRecon app). Training uses deterministic DiVeQ gradients
+without noise, so training and inference run the same forward pass; there is no `train` flag.
 
-<https://huggingface.co/GHSSHG/NanoRecon/tree/main>
+Models trained by this code are run with the NanoRecon app. The weights released before this
+change (<https://huggingface.co/GHSSHG/NanoRecon>) were trained with DiVeQ noise
+(`diveq_sigma2=1e-3`) and their `config.json` is not accepted by this code.
 
-Place the downloaded files under `checkpoints/NanoRecon/` if you want to run the inference example:
-
-```text
-checkpoints/
-  NanoRecon/
-    config.json
-    flax_model.msgpack
-```
-
-Alternatively, if you already have the Hugging Face CLI installed, you can run:
-
-```bash
-huggingface-cli download GHSSHG/NanoRecon --local-dir checkpoints/NanoRecon
-```
-
-The model repository contains:
-
-- `flax_model.msgpack`: Flax variables for inference.
-- `config.json`: model architecture and input signal metadata.
-
-The released model expects normalized signal chunks with shape `(batch, samples)`.
-
-Key settings:
-
-- sample rate: `5000 Hz`
-- segment length: `8192` samples
-- segment duration: `1.6384 s`
-- model variant: `foundation_v1`
-- codebook size: `65536`
-
-## Minimal Inference Example
+## Model Interface
 
 ```python
-import json
-from pathlib import Path
-
 import jax
 import jax.numpy as jnp
-from flax.core import freeze
-from flax.serialization import msgpack_restore
 
 from codec.models import build_audio_model
 
-repo_dir = Path("checkpoints/NanoRecon")
-cfg = json.loads((repo_dir / "config.json").read_text())
-
 model = build_audio_model(cfg["model"])
-variables = freeze(msgpack_restore((repo_dir / "flax_model.msgpack").read_bytes()))
-
-x = jnp.zeros((1, cfg["input_signal"]["segment_samples"]), dtype=jnp.float32)
-rng = jax.random.PRNGKey(0)
-
-out = model.apply(
-    variables,
-    x,
-    train=False,
-    offset=0,
-    rng=rng,
-    collect_codebook_stats=False,
-)
-
-reconstructed = out["wave_hat"]
-print(reconstructed.shape)
+variables = {"params": ..., "vq": ...}  # from a training checkpoint
+x = jnp.zeros((batch, 8192), dtype=jnp.float32)  # chunks normalized per chunk to [-1, 1]
+out = model.apply(variables, x)
+out["wave_hat"], out["enc"]["indices"]
 ```
 
-In real use, replace the zero input with normalized nanopore signal chunks prepared with the same normalization mode used for training.
+The codebook search is a Pallas/Triton kernel and needs a CUDA GPU.
 
 ## Training
 
@@ -172,15 +126,21 @@ python train.py \
   --log-every-steps 50
 ```
 
-Checkpoints are written under `checkpoints/` by default and are ignored by Git.
+Resume with `--resume checkpoints/<run>/periodic/checkpoint_<step>`.
+
+Checkpoints are written under `checkpoint.root_dir/<run name>` (default `checkpoints/offline-high-hard`),
+which is ignored by Git. Training refuses to start in a non-empty checkpoint directory unless it resumes.
 
 ## Configuration Notes
 
-- The public config defaults to `logging.wandb.enabled=false`.
-- If you use W&B, enable it explicitly with `--wandb` or edit the config locally.
+- `train.batch_size` is the global batch, split evenly over all visible GPUs (data parallel);
+  choose GPUs with `CUDA_VISIBLE_DEVICES`.
+- Data: files are visited in a seeded random order each epoch, `data.files_in_flight` files at a
+  time, and windows pass through a shuffle buffer of `data.shuffle_buffer` chunks; one background
+  thread prepares the batches.
+- The public config defaults to `logging.wandb.enabled=false`; enable W&B with `--wandb`.
 - Do not commit credentials or machine-specific dataset roots.
-- Multi-GPU behavior is controlled by `train.data_parallel`, `train.per_device_batch_size`, and the device-count scaling keys in the config.
-- The retained model was trained with 8192-sample chunks at 5000 Hz.
+- The model is trained on 8192-sample chunks at 5000 Hz.
 
 ## Citation
 

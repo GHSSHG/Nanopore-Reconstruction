@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, Tuple
 
-import jax
 import jax.numpy as jnp
 from flax import linen as nn
 
@@ -29,8 +28,6 @@ class SimVQAudioModel(nn.Module):
     param_dtype: Any = jnp.float32
     latent_bilstm_layers: int = 2
     latent_bilstm_hidden_dim: int | None = 256
-    diveq_sigma2: float = 1e-3
-    search_chunk_size: int = 2048
     quant_conv_kernel_size: int = 7
     post_quant_conv_kernel_size: int = 7
     encoder_use_block_norm: bool = True
@@ -40,7 +37,6 @@ class SimVQAudioModel(nn.Module):
     decoder_intermediate_dim: int = 1536
     decoder_num_layers: int = 12
     decoder_pos_net_enabled: bool = True
-    decoder_pos_net_dropout: float = 0.0
     decoder_pos_net_attention_heads: int = 12
     decoder_pos_net_attention_backend: str = "jax_cudnn"
     istft_n_fft: int = 512
@@ -97,7 +93,6 @@ class SimVQAudioModel(nn.Module):
             intermediate_dim=int(self.decoder_intermediate_dim),
             num_layers=int(self.decoder_num_layers),
             pos_net_enabled=bool(self.decoder_pos_net_enabled),
-            pos_net_dropout=float(self.decoder_pos_net_dropout),
             pos_net_attention_heads=int(self.decoder_pos_net_attention_heads),
             pos_net_attention_backend=str(self.decoder_pos_net_attention_backend),
             n_fft=int(self.istft_n_fft),
@@ -133,14 +128,7 @@ class SimVQAudioModel(nn.Module):
             param_dtype=quant_path_dtype,
             name="post_quant_conv",
         )
-        self.quantizer = SimVQ1D(
-            codebook_size=self.codebook_size,
-            code_dim=quantizer_dim,
-            diveq_sigma2=self.diveq_sigma2,
-            search_chunk_size=max(1, int(self.search_chunk_size)),
-            dtype=quant_path_dtype,
-            param_dtype=quant_path_dtype,
-        )
+        self.quantizer = SimVQ1D(codebook_size=self.codebook_size, code_dim=quantizer_dim)
         if int(self.latent_bilstm_layers) > 0:
             self.latent_bilstm = ResidualBiLSTM1D(
                 dim=int(self.latent_dim),
@@ -153,70 +141,30 @@ class SimVQAudioModel(nn.Module):
         else:
             self.latent_bilstm = None
 
-    def encode(
-        self,
-        x: jnp.ndarray,
-        *,
-        train: bool = False,
-        offset: int = 0,
-        rng: jax.random.KeyArray,
-        collect_codebook_stats: bool = True,
-    ) -> Tuple[jnp.ndarray, jnp.ndarray, Dict[str, Any]]:
-        enc_rng, _, quant_rng = jax.random.split(rng, 3)
-        h_e = self.encoder(x, train=train, offset=offset, rng=enc_rng).astype(jnp.float32)
+    def latents(self, x: jnp.ndarray) -> jnp.ndarray:
+        """Normalized chunks (B, L) -> pre-quantization latents (B, T, D)."""
+        h_e = self.encoder(x).astype(jnp.float32)
         if self.latent_bilstm is not None:
-            h_e = self.latent_bilstm(h_e.astype(self.enc_dtype), train=train).astype(jnp.float32)
-        h_qin = self.quant_conv(h_e.astype(jnp.float32))
-        z_q, info = self.quantizer(
-            h_qin.astype(jnp.float32),
-            rng=quant_rng,
-            train=train,
-            collect_codebook_stats=collect_codebook_stats,
-        )
+            h_e = self.latent_bilstm(h_e.astype(self.enc_dtype)).astype(jnp.float32)
+        return self.quant_conv(h_e.astype(jnp.float32))
+
+    def encode(self, x: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray, Dict[str, Any]]:
+        h_qin = self.latents(x)
+        z_q, info = self.quantizer(h_qin)
         return h_qin, z_q.astype(jnp.float32), info
 
-    def decode(self, z_q: jnp.ndarray, *, train: bool = False, rng: jax.random.KeyArray | None = None):
-        dec_rng = None
-        if rng is not None:
-            _, dec_rng = jax.random.split(rng)
+    def init_forward(self, x: jnp.ndarray):
+        """For model.init only: touches every submodule without the GPU codebook search."""
+        return self.decode(self.latents(x))[0], self.quantizer.projected_codebook()
+
+    def decode(self, z_q: jnp.ndarray):
         z_dec = self.post_quant_conv(z_q.astype(jnp.float32))
-        wave, aux = self.decoder(z_dec.astype(jnp.float32), train=train, rng=dec_rng)
+        wave, aux = self.decoder(z_dec.astype(jnp.float32))
         if wave.ndim == 3 and wave.shape[-1] == 1:
             wave = jnp.squeeze(wave, axis=-1)
         return wave.astype(jnp.float32), aux
 
-    def __call__(
-        self,
-        x: jnp.ndarray,
-        *,
-        train: bool = False,
-        offset: int = 0,
-        rng: jax.random.KeyArray,
-        collect_codebook_stats: bool = True,
-    ) -> Dict[str, Any]:
-        _, enc_rng, dec_rng = jax.random.split(rng, 3)
-        z_e, z_q, info = self.encode(
-            x,
-            train=train,
-            offset=offset,
-            rng=enc_rng,
-            collect_codebook_stats=collect_codebook_stats,
-        )
-        wave_hat, dec_aux = self.decode(z_q, train=train, rng=dec_rng)
-        usage_ratio = info.get("usage_ratio", jnp.array(0.0, dtype=z_e.dtype))
-        return {
-            "wave_hat": wave_hat,
-            "enc": {
-                "z_e": z_e,
-                "z_q": z_q,
-                "indices": info["indices"],
-                "perplexity": info["perplexity"],
-                "usage_ratio": usage_ratio,
-                "code_usage": usage_ratio,
-                "q_z_dist": info.get("q_z_dist", jnp.array(0.0, dtype=z_e.dtype)),
-                "log_q_z_dist": info.get("log_q_z_dist", jnp.array(0.0, dtype=z_e.dtype)),
-                "token_counts": info.get("token_counts"),
-                "total_tokens": info.get("total_tokens"),
-            },
-            "dec": dec_aux,
-        }
+    def __call__(self, x: jnp.ndarray) -> Dict[str, Any]:
+        z_e, z_q, info = self.encode(x)
+        wave_hat, dec_aux = self.decode(z_q)
+        return {"wave_hat": wave_hat, "enc": {"z_e": z_e, "z_q": z_q, **info}, "dec": dec_aux}

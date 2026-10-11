@@ -85,12 +85,11 @@ def create_generator_state(
     grad_clip: float = 1.0,
     group_lrs: Dict[str, float] | None = None,
 ) -> Tuple[GeneratorTrainState, Dict[str, Any]]:
-    # Parameter shapes do not depend on batch size; using a tiny init batch avoids
-    # large one-off allocator growth on the default GPU before replication.
+    # Parameter shapes do not depend on batch size; a one-chunk batch keeps initialization small.
     init_x = jnp.zeros((1, int(batch_shape[1])), dtype=jnp.float32)
     from flax.traverse_util import flatten_dict, unflatten_dict
 
-    variables = model.init(rng, init_x, train=True, offset=0, rng=rng)
+    variables = model.init(rng, init_x, method=SimVQAudioModel.init_forward)
     params = _force_frozen(variables["params"])
     vq_vars = _force_frozen(variables.get("vq", {}))
 

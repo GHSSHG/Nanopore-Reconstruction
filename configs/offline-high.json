@@ -3,18 +3,11 @@
   "train": {
     "epochs": 1,
     "batch_size": 64,
-    "reference_device_count": 4,
-    "per_device_batch_size": 16,
-    "auto_scale_batch_by_device_count": true,
-    "data_parallel": true,
-    "learning_rate": 5e-6,
-    "host_prefetch_size": 64,
-    "host_prefetch_per_device": 8,
-    "device_prefetch_size": 16,
-    "device_prefetch_per_device": 2,
+    "learning_rate": 5e-06,
     "grad_clip": 1.0,
     "log_every_steps": 500,
     "codebook_stats_every_steps": 2500,
+    "prefetch_batches": 8,
     "loss": {
       "pa_l1_scale": 50.0
     },
@@ -84,7 +77,6 @@
     "decoder_intermediate_dim": 2304,
     "decoder_num_layers": 12,
     "decoder_pos_net_enabled": true,
-    "decoder_pos_net_dropout": 0.0,
     "decoder_pos_net_attention_heads": 12,
     "decoder_pos_net_attention_backend": "jax_cudnn",
     "istft_n_fft": 512,
@@ -112,43 +104,21 @@
     "latent_bilstm_hidden_dim": 256,
     "cnn_compute_dtype": "fp32",
     "param_dtype": "fp32",
-    "diveq_sigma2": 0.001,
-    "search_chunk_size": 8192,
     "quant_conv_kernel_size": 7,
     "post_quant_conv_kernel_size": 7
   },
   "data": {
-    "type": "pod5",
     "root": "${DATA_PATH}/hereditary_cancer_2025.09/raw",
-    "segment_sec": 1.6384,
-    "segment_samples": 8192,
-    "segment_hop_samples": 8192,
-    "sample_rate": 5000,
-    "reference_device_count": 4,
     "subdirs": [
       "FC01/pod5"
     ],
-    "loader_workers": 32,
-    "loader_workers_per_device": 4,
-    "loader_prefetch_chunks": 4096,
-    "loader_prefetch_chunks_per_device": 512,
-    "auto_scale_loader_by_device_count": true,
-    "return_metadata": true,
+    "sample_rate": 5000,
+    "segment_samples": 8192,
+    "segment_hop_samples": 8192,
     "pad_short_reads": true,
     "min_read_length_for_pad": 6144,
-    "tail_chunk_mode": "shift_last",
-    "train": {
-      "root": "${DATA_PATH}/hereditary_cancer_2025.09/raw",
-      "subdirs": [
-        "FC01/pod5"
-      ],
-      "segment_samples": 8192,
-      "segment_hop_samples": 8192,
-      "pad_short_reads": true,
-      "min_read_length_for_pad": 6144,
-      "tail_chunk_mode": "shift_last",
-      "return_metadata": true
-    }
+    "shuffle_buffer": 32768,
+    "files_in_flight": 8
   },
   "checkpoint": {
     "root_dir": "checkpoints",
@@ -159,7 +129,7 @@
     "wandb": {
       "enabled": false,
       "project": "Nanopore Reconstruction",
-      "run_name": "offline-high"
+      "run_name": "offline-high-hard"
     }
   },
   "optim": {

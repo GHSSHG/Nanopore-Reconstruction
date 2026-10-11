@@ -34,24 +34,26 @@ def _band_ids_from_edges(*, n_fft: int, sample_rate: float, edges_hz: Sequence[f
     return tuple(ids)
 
 
-def _dropout(x: jnp.ndarray, *, rate: float, train: bool, rng: jax.Array | None) -> jnp.ndarray:
-    if (not train) or rate <= 0.0:
-        return x
-    if rng is None:
-        raise ValueError("dropout requires rng when train=True")
-    keep_prob = 1.0 - float(rate)
-    mask = jax.random.bernoulli(rng, p=keep_prob, shape=x.shape)
-    return jnp.where(mask, x / keep_prob, 0.0)
-
-
 def _swish(x: jnp.ndarray) -> jnp.ndarray:
     return x * nn.sigmoid(x)
 
 
 def _overlap_add(frames: jnp.ndarray, *, hop_length: int) -> jnp.ndarray:
+    """Sum frames (B, F, N) placed every `hop_length` samples -> (B, (F - 1) * hop + N)."""
     if frames.ndim != 3:
         raise ValueError(f"_overlap_add expects (B,F,N), got {frames.shape}")
-    _, num_frames, frame_length = frames.shape
+    batch, num_frames, frame_length = frames.shape
+    hop = int(hop_length)
+    if frame_length % hop == 0:
+        # Split each frame into hop-long segments and add them with shifts: no scatter, so it is
+        # deterministic and cheaper (forward and backward) than the indexed add below.
+        r_count = frame_length // hop
+        seg = frames.reshape(batch, num_frames, r_count, hop)
+        acc = None
+        for r in range(r_count):
+            part = jnp.pad(seg[:, :, r, :], ((0, 0), (r, r_count - 1 - r), (0, 0)))
+            acc = part if acc is None else acc + part
+        return acc.reshape(batch, (num_frames + r_count - 1) * hop)
     out_length = (int(num_frames) - 1) * int(hop_length) + int(frame_length)
     idx = (
         jnp.arange(int(num_frames), dtype=jnp.int32)[:, None] * int(hop_length)
@@ -125,8 +127,7 @@ class ConvNeXtBlock1D(nn.Module):
             self.param_dtype,
         )
 
-    def __call__(self, x: jnp.ndarray, *, train: bool = False) -> jnp.ndarray:
-        del train
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
         h = self.dwconv(x)
         h = self.norm(h)
         h = self.pwconv1(h)
@@ -138,7 +139,6 @@ class ConvNeXtBlock1D(nn.Module):
 
 class DecoderResnetBlock1D(nn.Module):
     dim: int
-    dropout: float = 0.0
     dtype: Any = jnp.float32
     param_dtype: Any = jnp.float32
 
@@ -164,13 +164,12 @@ class DecoderResnetBlock1D(nn.Module):
             name="conv2",
         )
 
-    def __call__(self, x: jnp.ndarray, *, train: bool = False, rng: jax.Array | None = None) -> jnp.ndarray:
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
         h = self.norm1(x)
         h = _swish(h)
         h = self.conv1(h)
         h = self.norm2(h)
         h = _swish(h)
-        h = _dropout(h, rate=float(self.dropout), train=train, rng=rng)
         h = self.conv2(h)
         return x + h
 
@@ -239,8 +238,7 @@ class DecoderSelfAttentionBlock1D(nn.Module):
             name="proj_out",
         )
 
-    def __call__(self, x: jnp.ndarray, *, train: bool = False) -> jnp.ndarray:
-        del train
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
         if x.ndim != 3:
             raise ValueError(f"DecoderSelfAttentionBlock1D expects (B,T,C), got {x.shape}")
         h = self.norm(x)
@@ -270,7 +268,6 @@ class DecoderSelfAttentionBlock1D(nn.Module):
 
 class DecoderPosNet1D(nn.Module):
     dim: int
-    dropout: float = 0.0
     attention_heads: int = 12
     attention_backend: str = "jax_cudnn"
     dtype: Any = jnp.float32
@@ -279,14 +276,12 @@ class DecoderPosNet1D(nn.Module):
     def setup(self) -> None:
         self.resnet_0 = DecoderResnetBlock1D(
             dim=self.dim,
-            dropout=self.dropout,
             dtype=self.dtype,
             param_dtype=self.param_dtype,
             name="resnet_0",
         )
         self.resnet_1 = DecoderResnetBlock1D(
             dim=self.dim,
-            dropout=self.dropout,
             dtype=self.dtype,
             param_dtype=self.param_dtype,
             name="resnet_1",
@@ -301,29 +296,24 @@ class DecoderPosNet1D(nn.Module):
         )
         self.resnet_2 = DecoderResnetBlock1D(
             dim=self.dim,
-            dropout=self.dropout,
             dtype=self.dtype,
             param_dtype=self.param_dtype,
             name="resnet_2",
         )
         self.resnet_3 = DecoderResnetBlock1D(
             dim=self.dim,
-            dropout=self.dropout,
             dtype=self.dtype,
             param_dtype=self.param_dtype,
             name="resnet_3",
         )
         self.norm = GroupNorm1D(self.dim, dtype=self.dtype, param_dtype=self.param_dtype, name="norm")
 
-    def __call__(self, x: jnp.ndarray, *, train: bool = False, rng: jax.Array | None = None) -> jnp.ndarray:
-        block_rngs: list[jax.Array | None] = [None, None, None, None]
-        if rng is not None:
-            block_rngs = list(jax.random.split(rng, 4))
-        h = self.resnet_0(x, train=train, rng=block_rngs[0])
-        h = self.resnet_1(h, train=train, rng=block_rngs[1])
-        h = self.attn(h, train=train)
-        h = self.resnet_2(h, train=train, rng=block_rngs[2])
-        h = self.resnet_3(h, train=train, rng=block_rngs[3])
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        h = self.resnet_0(x)
+        h = self.resnet_1(h)
+        h = self.attn(h)
+        h = self.resnet_2(h)
+        h = self.resnet_3(h)
         return self.norm(h)
 
 
@@ -334,7 +324,6 @@ class BandedGatedISTFTDecoder1D(nn.Module):
     intermediate_dim: int = 1536
     num_layers: int = 12
     pos_net_enabled: bool = True
-    pos_net_dropout: float = 0.0
     pos_net_attention_heads: int = 12
     pos_net_attention_backend: str = "jax_cudnn"
     n_fft: int = 512
@@ -379,7 +368,6 @@ class BandedGatedISTFTDecoder1D(nn.Module):
         if self.pos_net_enabled:
             self.pos_net = DecoderPosNet1D(
                 dim=self.dim,
-                dropout=float(self.pos_net_dropout),
                 attention_heads=int(self.pos_net_attention_heads),
                 attention_backend=str(self.pos_net_attention_backend),
                 dtype=self.dtype,
@@ -477,16 +465,13 @@ class BandedGatedISTFTDecoder1D(nn.Module):
     def _residual_alpha(self) -> jnp.ndarray:
         return float(self.residual_alpha_max) * nn.sigmoid(self.residual_raw_alpha.astype(jnp.float32))
 
-    def __call__(self, z: jnp.ndarray, *, train: bool = False, rng: jax.Array | None = None):
-        pos_rng = None
-        if rng is not None:
-            pos_rng, _ = jax.random.split(rng)
+    def __call__(self, z: jnp.ndarray):
         h = z.astype(self.dtype)
         h = self.embed(h)
         if self.pos_net is not None:
-            h = self.pos_net(h, train=train, rng=pos_rng)
+            h = self.pos_net(h)
         for block in self.blocks:
-            h = block(h, train=train)
+            h = block(h)
         h = self.final_norm(h)
         h_fp32 = h.astype(jnp.float32)
 

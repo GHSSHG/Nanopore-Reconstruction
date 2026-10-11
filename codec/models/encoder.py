@@ -141,8 +141,7 @@ class SEANetResnetBlock1D(nn.Module):
         else:
             self.norm2 = None
 
-    def __call__(self, x: jnp.ndarray, *, train: bool = False) -> jnp.ndarray:
-        del train
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
         h = self.conv1(x)
         if self.norm1 is not None:
             h = self.norm1(h)
@@ -201,11 +200,10 @@ class EncoderStage1D(nn.Module):
         else:
             self.transition_norm = None
 
-    def __call__(self, x: jnp.ndarray, *, train: bool = False, rng: Any | None = None) -> jnp.ndarray:
-        del rng
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
         h = x
         for block in self.blocks:
-            h = block(h, train=train)
+            h = block(h)
         h = h.astype(self.dtype)
         h = self.transition(h)
         if self.transition_norm is not None:
@@ -285,20 +283,12 @@ class SimVQEncoder1D(nn.Module):
             raise ValueError(f"Unexpected signal shape {x.shape}")
         return x.astype(self.dtype)
 
-    def __call__(
-        self,
-        x: jnp.ndarray,
-        *,
-        train: bool = False,
-        offset: int = 0,
-        rng: Any | None = None,
-    ) -> jnp.ndarray:
-        del offset, rng
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
         h = self._normalize_input(x)
         h = self.conv_in(h)
         if self.conv_in_norm is not None:
             h = self.conv_in_norm(h)
         h = _elu(h)
         for stage in self.stages:
-            h = stage(h, train=train)
+            h = stage(h)
         return h

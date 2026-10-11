@@ -67,7 +67,6 @@ def _foundation_defaults() -> dict[str, Any]:
         "decoder_intermediate_dim": 1536,
         "decoder_num_layers": 12,
         "decoder_pos_net_enabled": True,
-        "decoder_pos_net_dropout": 0.0,
         "decoder_pos_net_attention_heads": 12,
         "decoder_pos_net_attention_backend": "jax_cudnn",
         "istft_n_fft": 512,
@@ -84,8 +83,6 @@ def _foundation_defaults() -> dict[str, Any]:
         "latent_bilstm_hidden_dim": 256,
         "cnn_compute_dtype": "fp32",
         "param_dtype": "fp32",
-        "diveq_sigma2": 1e-3,
-        "search_chunk_size": 2048,
         "quant_conv_kernel_size": 7,
         "post_quant_conv_kernel_size": 7,
         "encoder_use_block_norm": True,
@@ -190,8 +187,6 @@ def build_audio_model(model_cfg: dict[str, Any] | None) -> SimVQAudioModel:
             if merged_cfg.get("latent_bilstm_hidden_dim") is None
             else int(merged_cfg.get("latent_bilstm_hidden_dim"))
         ),
-        diveq_sigma2=float(merged_cfg.get("diveq_sigma2", 1e-3)),
-        search_chunk_size=int(merged_cfg.get("search_chunk_size", 2048)),
         quant_conv_kernel_size=int(merged_cfg.get("quant_conv_kernel_size", 7)),
         post_quant_conv_kernel_size=int(merged_cfg.get("post_quant_conv_kernel_size", 7)),
         encoder_use_block_norm=bool(merged_cfg.get("encoder_use_block_norm", True)),
@@ -201,7 +196,6 @@ def build_audio_model(model_cfg: dict[str, Any] | None) -> SimVQAudioModel:
         decoder_intermediate_dim=int(merged_cfg.get("decoder_intermediate_dim", 1536)),
         decoder_num_layers=int(merged_cfg.get("decoder_num_layers", 12)),
         decoder_pos_net_enabled=bool(merged_cfg.get("decoder_pos_net_enabled", True)),
-        decoder_pos_net_dropout=float(merged_cfg.get("decoder_pos_net_dropout", 0.0)),
         decoder_pos_net_attention_heads=int(merged_cfg.get("decoder_pos_net_attention_heads", 12)),
         decoder_pos_net_attention_backend=str(merged_cfg.get("decoder_pos_net_attention_backend", "jax_cudnn")),
         istft_n_fft=int(merged_cfg.get("istft_n_fft", 512)),
