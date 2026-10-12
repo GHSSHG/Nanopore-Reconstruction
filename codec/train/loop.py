@@ -15,6 +15,13 @@ from .step import codebook_stats, make_train_step
 from ..data.pod5_dataset import Pod5ChunkDataset
 
 
+def _host_broadcast(tree: Any, ndev: int) -> Any:
+    """Host copies of every leaf stacked to (ndev, ...); pmap then sends each device its copy from
+    host memory. Not jax_utils.replicate: it fills the other GPUs by GPU-to-GPU copies, which
+    arrive corrupted on the lab server (GPU1-3 then train on garbage weights)."""
+    return jax.tree_util.tree_map(lambda x: np.broadcast_to(np.asarray(x), (ndev,) + np.shape(x)).copy(), jax.device_get(tree))
+
+
 def train_model_from_pod5(
     ds: Pod5ChunkDataset,
     *,
@@ -70,11 +77,11 @@ def train_model_from_pod5(
     if resume_from is not None:
         state = flax_ckpt.restore_checkpoint(ckpt_dir=str(resume_from), target={"gen": state})["gen"]
         _log(f"[resume] restored {resume_from} (step={int(state.step)})")
-    state = jax_utils.replicate(state)
+    state = _host_broadcast(state, ndev)
     train_step = make_train_step(loss_weights, stft_loss_scales, model.codebook_size)
 
     def _zero_counts():  # fresh buffers: the train step donates (reuses) the counts it is given
-        return jax_utils.replicate(np.zeros(model.codebook_size, np.int32))
+        return np.zeros((ndev, model.codebook_size), np.int32)
 
     counts = _zero_counts()
 
