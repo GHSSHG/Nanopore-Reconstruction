@@ -103,12 +103,12 @@ def nearest_codeword(z: jnp.ndarray, codebook: SearchCodebook) -> jnp.ndarray:
 
 
 class SimVQ1D(nn.Module):
-    """SimVQ quantizer for 1D latents (B, T, C) with deterministic DiVeQ gradients.
+    """SimVQ quantizer for 1D latents (B, T, C), trained as a classic VQ-VAE.
 
     The forward value is always the nearest projected codeword, so training and inference
-    compute the same thing. Gradients follow DiVeQ without noise: z_q acts as
-    z + ||q - z|| * stop_grad((q - z) / ||q - z||), which moves z and the codebook projection
-    along the quantization error.
+    compute the same thing. Gradients pass straight through to z; the codebook projection is
+    trained by the codebook loss ||q - sg(z)||^2 and the encoder is pulled toward its codewords
+    by the commitment loss ||z - sg(q)||^2 (both returned in info, weighted in the train step).
     """
 
     codebook_size: int
@@ -138,15 +138,16 @@ class SimVQ1D(nn.Module):
         indices = nearest_codeword(jax.lax.stop_gradient(z).reshape(B * T, C), search)
         quant = jnp.take(codebook, indices, axis=0).reshape(B, T, C)
 
-        diff = quant - z
-        diff_norm = jnp.sqrt(jnp.sum(jnp.square(diff), axis=-1, keepdims=True) + 1e-16)
-        diveq = z + diff_norm * jax.lax.stop_gradient(diff / diff_norm)
-        # Forward value is exactly the codeword; the gradient is that of the DiVeQ expression.
-        z_q = jax.lax.stop_gradient(quant) + (diveq - jax.lax.stop_gradient(diveq))
+        # Straight-through: the forward value is exactly the codeword, the gradient goes to z.
+        z_q = jax.lax.stop_gradient(quant) + (z - jax.lax.stop_gradient(z))
 
+        dist = jnp.sqrt(jnp.sum(jnp.square(jax.lax.stop_gradient(quant - z)), axis=-1) + 1e-16)
         info = {
             "indices": indices.reshape(B, T),
-            "q_z_dist": jnp.mean(diff_norm),
-            "log_q_z_dist": jnp.mean(jnp.log(diff_norm)),
+            "vq_codebook_loss": jnp.mean(jnp.square(quant - jax.lax.stop_gradient(z))),
+            "vq_commitment_loss": jnp.mean(jnp.square(z - jax.lax.stop_gradient(quant))),
+            "q_z_dist": jnp.mean(dist),
+            "z_norm": jnp.mean(jnp.linalg.norm(jax.lax.stop_gradient(z), axis=-1)),
+            "code_norm": jnp.mean(jnp.linalg.norm(jax.lax.stop_gradient(codebook), axis=-1)),
         }
         return z_q, info

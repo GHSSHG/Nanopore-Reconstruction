@@ -3,10 +3,10 @@
   "train": {
     "epochs": 1,
     "batch_size": 64,
-    "learning_rate": 5e-06,
+    "learning_rate": 0.0001,
+    "warmup_steps": 10000,
     "grad_clip": 1.0,
     "log_every_steps": 500,
-    "codebook_stats_every_steps": 2500,
     "prefetch_batches": 8,
     "loss": {
       "pa_l1_scale": 50.0
@@ -23,7 +23,9 @@
       "lowpass_l1_200hz": 0.05,
       "lowpass_l1_500hz": 0.05,
       "lowpass_l1_1000hz": 0.025,
-      "residual_energy_l2": 0.02
+      "residual_energy_l2": 0.02,
+      "vq_codebook": 1.0,
+      "vq_commitment": 0.25
     },
     "stft_loss": {
       "scales": [
@@ -131,7 +133,7 @@
     "wandb": {
       "enabled": true,
       "project": "Nanopore Reconstruction",
-      "run_name": "offline-high-hard"
+      "run_name": "offline-high-vqaux"
     }
   },
   "optim": {

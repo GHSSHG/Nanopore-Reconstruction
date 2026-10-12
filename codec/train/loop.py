@@ -6,11 +6,12 @@ from typing import Any, Dict
 
 import jax
 import numpy as np
+import optax
 from flax import jax_utils
 from flax.training import checkpoints as flax_ckpt
 
 from .states import create_generator_state
-from .step import make_codebook_stats, make_train_step
+from .step import codebook_stats, make_train_step
 from ..data.pod5_dataset import Pod5ChunkDataset
 
 
@@ -21,6 +22,7 @@ def train_model_from_pod5(
     batch_size: int,
     num_epochs: int,
     learning_rate: float,
+    warmup_steps: int,
     grad_clip: float,
     lr_multipliers: Dict[str, float],
     loss_weights: Dict[str, float],
@@ -30,7 +32,6 @@ def train_model_from_pod5(
     resume_from: Path | None = None,
     log_every_steps: int = 500,
     checkpoint_every_steps: int = 10000,
-    codebook_stats_every_steps: int = 2500,
     prefetch_batches: int = 8,
     max_steps_total: int | None = None,
     max_steps_per_epoch: int | None = None,
@@ -60,7 +61,8 @@ def train_model_from_pod5(
         jax.random.PRNGKey(seed),
         model,
         (1, ds.chunk_samples),
-        float(learning_rate),
+        # Linear warmup from 0, then constant.
+        optax.linear_schedule(0.0, float(learning_rate), int(warmup_steps)) if warmup_steps > 0 else float(learning_rate),
         grad_clip=grad_clip,
         group_lrs=lr_multipliers,
     )
@@ -69,8 +71,12 @@ def train_model_from_pod5(
         state = flax_ckpt.restore_checkpoint(ckpt_dir=str(resume_from), target={"gen": state})["gen"]
         _log(f"[resume] restored {resume_from} (step={int(state.step)})")
     state = jax_utils.replicate(state)
-    train_step = make_train_step(loss_weights, stft_loss_scales)
-    codebook_stats = make_codebook_stats(model.codebook_size)
+    train_step = make_train_step(loss_weights, stft_loss_scales, model.codebook_size)
+
+    def _zero_counts():  # fresh buffers: the train step donates (reuses) the counts it is given
+        return jax_utils.replicate(np.zeros(model.codebook_size, np.int32))
+
+    counts = _zero_counts()
 
     def _save(step: int) -> None:
         path = flax_ckpt.save_checkpoint(
@@ -102,7 +108,7 @@ def train_model_from_pod5(
                 if batch is None:
                     break
                 data_wait += time.perf_counter() - t0
-                state, logs = train_step(state, batch)
+                state, logs, counts = train_step(state, batch, counts)
                 window.append(logs)
                 steps_this_epoch += 1
                 global_step += 1
@@ -110,20 +116,16 @@ def train_model_from_pod5(
                 if log_every_steps > 0 and global_step % log_every_steps == 0:
                     host = jax.device_get(window)
                     means = {k: float(np.mean([w[k][0] for w in host])) for k in host[0]}
+                    # Codebook statistics over every code chosen in the window, all devices.
+                    means.update(codebook_stats(jax.device_get(counts).sum(axis=0)))
                     elapsed = time.perf_counter() - window_start
                     perf = {"step_ms": 1000.0 * elapsed / len(window), "data_wait_ms": 1000.0 * data_wait / len(window)}
                     _log(f"[step {global_step}] " + ", ".join(f"{k}={v:.4f}" for k, v in sorted(means.items())))
                     _log(f"[perf step {global_step}] step_ms={perf['step_ms']:.1f}, data_wait_ms={perf['data_wait_ms']:.1f}")
                     if wandb_logger is not None:
                         wandb_logger.log({**means, **{f"perf/{k}": v for k, v in perf.items()}}, step=global_step)
-                    window = []
+                    window, counts = [], _zero_counts()
                     window_start, data_wait = time.perf_counter(), 0.0
-
-                if codebook_stats_every_steps > 0 and global_step % codebook_stats_every_steps == 0:
-                    stats = {k: float(v[0]) for k, v in jax.device_get(codebook_stats(state, batch)).items()}
-                    _log(f"[codebook step {global_step}] " + ", ".join(f"{k}={v:.4f}" for k, v in sorted(stats.items())))
-                    if wandb_logger is not None:
-                        wandb_logger.log(stats, step=global_step)
 
                 if checkpoint_every_steps > 0 and global_step % checkpoint_every_steps == 0:
                     _save(global_step)

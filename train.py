@@ -40,6 +40,8 @@ LOSS_WEIGHT_KEYS = frozenset(
         "lowpass_l1_500hz",
         "lowpass_l1_1000hz",
         "residual_energy_l2",
+        "vq_codebook",
+        "vq_commitment",
     }
 )
 
@@ -128,6 +130,7 @@ def main() -> None:
             batch_size=int(args.batch_size or train_cfg["batch_size"]),
             num_epochs=int(args.epochs or train_cfg.get("epochs", 1)),
             learning_rate=float(args.lr if args.lr is not None else train_cfg["learning_rate"]),
+            warmup_steps=int(train_cfg.get("warmup_steps", 0)),
             grad_clip=float(train_cfg.get("grad_clip", 1.0)),
             lr_multipliers={str(k): float(v) for k, v in cfg.get("optim", {}).get("lr_multipliers", {}).items()},
             loss_weights=loss_weights,
@@ -137,7 +140,6 @@ def main() -> None:
             resume_from=resume_from,
             log_every_steps=int(args.log_every_steps or train_cfg.get("log_every_steps", 500)),
             checkpoint_every_steps=int(ckpt_cfg.get("every_steps", 10000)),
-            codebook_stats_every_steps=int(train_cfg.get("codebook_stats_every_steps", 2500)),
             prefetch_batches=int(train_cfg.get("prefetch_batches", 8)),
             max_steps_total=args.max_steps,
             max_steps_per_epoch=args.max_steps_per_epoch,
