@@ -14,15 +14,13 @@
     "loss_weights": {
       "time_l1": 0.0,
       "pa_l1": 1.0,
-      "diff1_l1": 0.25,
-      "diff2_l1": 0.05,
+      "diff1_l1": 1.0,
+      "diff2_l1": 0.5,
       "small_stft_logmag_l1": 0.05,
       "medium_stft_logmag_l1": 0.05,
       "large_stft_logmag_l1": 0.05,
       "complex_stft_l1": 0.03,
-      "lowpass_l1_200hz": 0.05,
-      "lowpass_l1_500hz": 0.05,
-      "lowpass_l1_1000hz": 0.025,
+      "highpass_l1_1000hz": 1.5,
       "residual_energy_l2": 0.02,
       "vq_codebook": 1.0,
       "vq_commitment": 0.25
@@ -81,7 +79,7 @@
     "decoder_pos_net_enabled": true,
     "decoder_pos_net_attention_heads": 12,
     "decoder_pos_net_attention_backend": "jax_cudnn",
-    "istft_n_fft": 512,
+    "istft_n_fft": 64,
     "istft_hop_length": 16,
     "istft_sample_rate": 5000,
     "istft_band_edges_hz": [
@@ -91,13 +89,13 @@
     ],
     "istft_band_gain_init": [
       1.0,
-      0.8,
-      0.45,
-      0.12
+      1.0,
+      1.0,
+      1.0
     ],
     "istft_dynamic_gate_scale": 0.5,
     "residual_correction": {
-      "enabled": true,
+      "enabled": false,
       "alpha_init": 0.0,
       "alpha_max": 0.1,
       "hidden_dim": 192

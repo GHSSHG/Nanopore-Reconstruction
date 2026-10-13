@@ -169,7 +169,7 @@ def complex_stft_l1_loss(
     return _masked_mean_like(diff, frame_weights)
 
 
-def lowpass_l1_loss(
+def highpass_l1_loss(
     y: jnp.ndarray,
     y_hat: jnp.ndarray,
     *,
@@ -177,16 +177,17 @@ def lowpass_l1_loss(
     sample_rate_hz: float | jnp.ndarray = 5000.0,
     valid_mask: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
+    """Time-domain L1 of the components above cutoff_hz (phase-sensitive, unlike the log-magnitude STFT terms)."""
     y = _ensure_batch_time(y)
     y_hat = _ensure_batch_time(y_hat)
     n = int(y.shape[-1])
     sample_rate = jnp.asarray(sample_rate_hz, dtype=jnp.float32)
     cutoff = jnp.asarray(cutoff_hz, dtype=jnp.float32)
     freqs = jnp.arange(n // 2 + 1, dtype=jnp.float32) * (sample_rate / float(n))
-    keep = (freqs <= cutoff).astype(jnp.float32)
-    y_lp = jnp.fft.irfft(jnp.fft.rfft(y, axis=-1) * keep[None, :], n=n, axis=-1)
-    y_hat_lp = jnp.fft.irfft(jnp.fft.rfft(y_hat, axis=-1) * keep[None, :], n=n, axis=-1)
-    return _masked_mean_like(jnp.abs(y_lp - y_hat_lp), valid_mask)
+    keep = (freqs > cutoff).astype(jnp.float32)
+    y_hp = jnp.fft.irfft(jnp.fft.rfft(y, axis=-1) * keep[None, :], n=n, axis=-1)
+    y_hat_hp = jnp.fft.irfft(jnp.fft.rfft(y_hat, axis=-1) * keep[None, :], n=n, axis=-1)
+    return _masked_mean_like(jnp.abs(y_hp - y_hat_hp), valid_mask)
 
 
 def pa_l1_loss(
@@ -325,21 +326,18 @@ def compute_reconstruction_losses(
     logs["complex_stft_l1_loss_raw"] = complex_raw
     logs["complex_stft_l1_loss"] = complex_term
 
-    sample_rate_hz = _weight("sample_rate", 5000.0)
-    for cutoff in (200, 500, 1000):
-        weight = _weight(f"lowpass_l1_{cutoff}hz", 0.0)
-        raw = lowpass_l1_loss(
-            y,
-            y_hat,
-            cutoff_hz=float(cutoff),
-            sample_rate_hz=sample_rate_hz,
-            valid_mask=valid_mask,
-        )
-        term = weight * raw
-        reconstruct = reconstruct + term
-        total = total + term
-        logs[f"lowpass_l1_{cutoff}hz_loss_raw"] = raw
-        logs[f"lowpass_l1_{cutoff}hz_loss"] = term
+    highpass_raw = highpass_l1_loss(
+        y,
+        y_hat,
+        cutoff_hz=1000.0,
+        sample_rate_hz=_weight("sample_rate", 5000.0),
+        valid_mask=valid_mask,
+    )
+    highpass_term = _weight("highpass_l1_1000hz", 0.0) * highpass_raw
+    reconstruct = reconstruct + highpass_term
+    total = total + highpass_term
+    logs["highpass_l1_1000hz_loss_raw"] = highpass_raw
+    logs["highpass_l1_1000hz_loss"] = highpass_term
 
     decoder_aux = dict(decoder_aux or {})
     residual_raw = jnp.asarray(decoder_aux.get("residual_energy_l2_raw", 0.0), dtype=dtype)
