@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 import jax
 import numpy as np
@@ -43,6 +43,7 @@ def train_model_from_pod5(
     max_steps_total: int | None = None,
     max_steps_per_epoch: int | None = None,
     wandb_logger: Any | None = None,
+    on_checkpoint: Callable[[int, str], None] | None = None,
 ):
     from ..models import build_audio_model
 
@@ -94,6 +95,8 @@ def train_model_from_pod5(
             keep=1_000_000,
         )
         _log(f"[ckpt] step={step} written to {path}")
+        if on_checkpoint is not None:
+            on_checkpoint(step, path)
 
     def _shard(batch: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
         return {k: v.reshape((ndev, v.shape[0] // ndev) + v.shape[1:]) for k, v in batch.items()}

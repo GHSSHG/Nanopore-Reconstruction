@@ -5,7 +5,7 @@ from typing import Any, Dict, Tuple
 import jax.numpy as jnp
 from flax import linen as nn
 
-from .decoder import BandedGatedISTFTDecoder1D
+from .decoder import ISTFTDecoder1D
 from .encoder import SimVQEncoder1D
 from .quantize import SimVQ1D
 from .recurrent import ResidualBiLSTM1D
@@ -39,16 +39,8 @@ class SimVQAudioModel(nn.Module):
     decoder_pos_net_enabled: bool = True
     decoder_pos_net_attention_heads: int = 12
     decoder_pos_net_attention_backend: str = "jax_cudnn"
-    istft_n_fft: int = 512
-    istft_hop_length: int = 24
-    istft_sample_rate: float = 5000.0
-    istft_band_edges_hz: Tuple[float, ...] = (200.0, 500.0, 1000.0)
-    istft_band_gain_init: Tuple[float, ...] = (1.0, 0.8, 0.45, 0.12)
-    istft_dynamic_gate_scale: float = 0.5
-    residual_correction_enabled: bool = False
-    residual_correction_alpha_init: float = 0.0
-    residual_correction_alpha_max: float = 0.1
-    residual_correction_hidden_dim: int = 128
+    istft_n_fft: int = 64
+    istft_hop_length: int = 16
 
     def setup(self) -> None:
         enc_channels = tuple(int(ch) for ch in self.enc_channels)
@@ -86,7 +78,7 @@ class SimVQAudioModel(nn.Module):
             dtype=self.enc_dtype,
             param_dtype=self.param_dtype,
         )
-        self.decoder = BandedGatedISTFTDecoder1D(
+        self.decoder = ISTFTDecoder1D(
             out_channels=self.in_channels,
             input_dim=dec_channels[0],
             dim=int(self.decoder_dim),
@@ -97,14 +89,6 @@ class SimVQAudioModel(nn.Module):
             pos_net_attention_backend=str(self.decoder_pos_net_attention_backend),
             n_fft=int(self.istft_n_fft),
             hop_length=int(self.istft_hop_length),
-            sample_rate=float(self.istft_sample_rate),
-            band_edges_hz=tuple(float(v) for v in self.istft_band_edges_hz),
-            band_gain_init=tuple(float(v) for v in self.istft_band_gain_init),
-            dynamic_gate_scale=float(self.istft_dynamic_gate_scale),
-            residual_enabled=bool(self.residual_correction_enabled),
-            residual_hidden_dim=int(self.residual_correction_hidden_dim),
-            residual_alpha_init=float(self.residual_correction_alpha_init),
-            residual_alpha_max=float(self.residual_correction_alpha_max),
             dtype=self.dec_dtype,
             param_dtype=self.param_dtype,
         )
@@ -155,16 +139,12 @@ class SimVQAudioModel(nn.Module):
 
     def init_forward(self, x: jnp.ndarray):
         """For model.init only: touches every submodule without the GPU codebook search."""
-        return self.decode(self.latents(x))[0], self.quantizer.projected_codebook()
+        return self.decode(self.latents(x)), self.quantizer.projected_codebook()
 
-    def decode(self, z_q: jnp.ndarray):
+    def decode(self, z_q: jnp.ndarray) -> jnp.ndarray:
         z_dec = self.post_quant_conv(z_q.astype(jnp.float32))
-        wave, aux = self.decoder(z_dec.astype(jnp.float32))
-        if wave.ndim == 3 and wave.shape[-1] == 1:
-            wave = jnp.squeeze(wave, axis=-1)
-        return wave.astype(jnp.float32), aux
+        return self.decoder(z_dec.astype(jnp.float32)).astype(jnp.float32)
 
     def __call__(self, x: jnp.ndarray) -> Dict[str, Any]:
         z_e, z_q, info = self.encode(x)
-        wave_hat, dec_aux = self.decode(z_q)
-        return {"wave_hat": wave_hat, "enc": {"z_e": z_e, "z_q": z_q, **info}, "dec": dec_aux}
+        return {"wave_hat": self.decode(z_q), "enc": {"z_e": z_e, "z_q": z_q, **info}}

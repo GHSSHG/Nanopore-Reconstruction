@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -32,12 +33,10 @@ LOSS_WEIGHT_KEYS = frozenset(
         "pa_l1",
         "diff1_l1",
         "diff2_l1",
-        "small_stft_logmag_l1",
-        "medium_stft_logmag_l1",
-        "large_stft_logmag_l1",
-        "complex_stft_l1",
-        "highpass_l1_1000hz",
-        "residual_energy_l2",
+        "band_l1_500_1000hz",
+        "band_l1_1000_2500hz",
+        "stft_logmag_500_1000hz",
+        "stft_logmag_1000_2500hz",
         "vq_codebook",
         "vq_commitment",
     }
@@ -69,6 +68,33 @@ def _resolve_path(value: str, base: Path) -> Path:
         )
     path = Path(expanded).expanduser()
     return path if path.is_absolute() else (base / path).resolve()
+
+
+def _validation_launcher(cfg_path: Path, ckpt_dir: Path, vcfg: Dict[str, Any]):
+    """Callback that starts validate.py on GPU validation.gpu for each new checkpoint, in the
+    background (its own session, so stopping training leaves a running validation alone)."""
+    if not vcfg.get("enabled", False):
+        return None
+    running: list[subprocess.Popen] = []
+
+    def launch(step: int, path: str) -> None:
+        running[:] = [p for p in running if p.poll() is None]  # reap finished ones
+        out = ckpt_dir / "validation" / f"step_{step}"
+        out.mkdir(parents=True, exist_ok=True)
+        with open(out / "run.log", "w") as log:
+            running.append(
+                subprocess.Popen(
+                    [sys.executable, str(_ROOT / "validate.py"), "--config", str(cfg_path), "--checkpoint", str(path), "--out", str(out)],
+                    env=dict(os.environ, CUDA_VISIBLE_DEVICES=str(vcfg.get("gpu", 0))),
+                    stdin=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            )
+        print(f"[validation] step={step} started on GPU {vcfg.get('gpu', 0)}, results in {out}", flush=True)
+
+    return launch
 
 
 def main() -> None:
@@ -142,6 +168,7 @@ def main() -> None:
             max_steps_total=args.max_steps,
             max_steps_per_epoch=args.max_steps_per_epoch,
             wandb_logger=wandb_logger,
+            on_checkpoint=_validation_launcher(cfg_path, ckpt_dir, cfg.get("validation", {})),
         )
     finally:
         if wandb_logger is not None:

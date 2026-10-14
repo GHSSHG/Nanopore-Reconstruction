@@ -69,16 +69,8 @@ def _foundation_defaults() -> dict[str, Any]:
         "decoder_pos_net_enabled": True,
         "decoder_pos_net_attention_heads": 12,
         "decoder_pos_net_attention_backend": "jax_cudnn",
-        "istft_n_fft": 512,
-        "istft_hop_length": 24,
-        "istft_sample_rate": 5000.0,
-        "istft_band_edges_hz": (200.0, 500.0, 1000.0),
-        "istft_band_gain_init": (1.0, 0.8, 0.45, 0.12),
-        "istft_dynamic_gate_scale": 0.5,
-        "residual_correction_enabled": True,
-        "residual_correction_alpha_init": 0.0,
-        "residual_correction_alpha_max": 0.1,
-        "residual_correction_hidden_dim": 128,
+        "istft_n_fft": 64,
+        "istft_hop_length": 16,
         "latent_bilstm_layers": 2,
         "latent_bilstm_hidden_dim": 256,
         "cnn_compute_dtype": "fp32",
@@ -128,6 +120,15 @@ _REMOVED_MODEL_KEYS = frozenset(
         "transformer_use_rope",
         "transformer_rope_base",
         "transformer_compute_dtype",
+        "istft_sample_rate",
+        "istft_band_edges_hz",
+        "istft_band_gain_init",
+        "istft_dynamic_gate_scale",
+        "residual_correction",
+        "residual_correction_enabled",
+        "residual_correction_alpha_init",
+        "residual_correction_alpha_max",
+        "residual_correction_hidden_dim",
     }
 )
 
@@ -143,7 +144,6 @@ def _validate_model_keys(model_cfg: dict[str, Any]) -> None:
         "variant",
         "enc_num_res_blocks",
         "compute_dtype",
-        "residual_correction",
     }
     unknown = sorted(set(model_cfg) - supported)
     if unknown:
@@ -155,7 +155,6 @@ def build_audio_model(model_cfg: dict[str, Any] | None) -> SimVQAudioModel:
     _validate_model_keys(mcfg)
     _normalize_variant(mcfg.get("variant", "foundation_v1"))
     merged_cfg = {**_foundation_defaults(), **mcfg}
-    residual_cfg = dict(merged_cfg.get("residual_correction") or {})
 
     if int(merged_cfg.get("latent_bilstm_layers", 0)) <= 0:
         raise ValueError("foundation_v1 requires latent_bilstm_layers > 0.")
@@ -198,36 +197,8 @@ def build_audio_model(model_cfg: dict[str, Any] | None) -> SimVQAudioModel:
         decoder_pos_net_enabled=bool(merged_cfg.get("decoder_pos_net_enabled", True)),
         decoder_pos_net_attention_heads=int(merged_cfg.get("decoder_pos_net_attention_heads", 12)),
         decoder_pos_net_attention_backend=str(merged_cfg.get("decoder_pos_net_attention_backend", "jax_cudnn")),
-        istft_n_fft=int(merged_cfg.get("istft_n_fft", 512)),
-        istft_hop_length=int(merged_cfg.get("istft_hop_length", 24)),
-        istft_sample_rate=float(merged_cfg.get("istft_sample_rate", 5000.0)),
-        istft_band_edges_hz=tuple(float(v) for v in merged_cfg.get("istft_band_edges_hz", (200.0, 500.0, 1000.0))),
-        istft_band_gain_init=tuple(float(v) for v in merged_cfg.get("istft_band_gain_init", (1.0, 0.8, 0.45, 0.12))),
-        istft_dynamic_gate_scale=float(merged_cfg.get("istft_dynamic_gate_scale", 0.5)),
-        residual_correction_enabled=bool(
-            residual_cfg.get(
-                "enabled",
-                merged_cfg.get("residual_correction_enabled", True),
-            )
-        ),
-        residual_correction_alpha_init=float(
-            residual_cfg.get(
-                "alpha_init",
-                merged_cfg.get("residual_correction_alpha_init", 0.0),
-            )
-        ),
-        residual_correction_alpha_max=float(
-            residual_cfg.get(
-                "alpha_max",
-                merged_cfg.get("residual_correction_alpha_max", 0.1),
-            )
-        ),
-        residual_correction_hidden_dim=int(
-            residual_cfg.get(
-                "hidden_dim",
-                merged_cfg.get("residual_correction_hidden_dim", 128),
-            )
-        ),
+        istft_n_fft=int(merged_cfg.get("istft_n_fft", 64)),
+        istft_hop_length=int(merged_cfg.get("istft_hop_length", 16)),
     )
 
 

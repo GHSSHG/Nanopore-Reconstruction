@@ -31,7 +31,6 @@ def make_train_step(loss_weights: Dict[str, float], stft_loss_scales: tuple[tupl
                 stft_loss_scales=stft_loss_scales,
                 pa_half_range=batch["pa_half_range"],
                 valid_mask=batch["valid_mask"],
-                decoder_aux=out["dec"],
             )
             enc = out["enc"]
             total = recon + w_codebook * enc["vq_codebook_loss"] + w_commitment * enc["vq_commitment_loss"]

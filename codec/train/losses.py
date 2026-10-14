@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Sequence
+from typing import Dict, Sequence
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 
 def _as_float_signal(x: jnp.ndarray) -> jnp.ndarray:
@@ -73,14 +74,7 @@ def _masked_mean_like(x: jnp.ndarray, weights: jnp.ndarray | None = None, *, eps
     return jnp.sum(x * w) / denom
 
 
-def _stft_complex(
-    x: jnp.ndarray,
-    *,
-    n_fft: int,
-    hop_length: int,
-    win_length: int,
-    norm: str | None = None,
-) -> jnp.ndarray:
+def _stft_complex(x: jnp.ndarray, *, n_fft: int, hop_length: int, win_length: int) -> jnp.ndarray:
     signal = _ensure_batch_time(x)
     fft_size = max(1, int(n_fft))
     frame_length = max(1, min(int(win_length), fft_size))
@@ -88,8 +82,7 @@ def _stft_complex(
     window = _hann_window(frame_length, dtype=signal.dtype)
     frames = _frame_signal(signal, frame_length=frame_length, hop_length=hop)
     windowed = frames * window[None, None, :]
-    spec = jnp.fft.rfft(windowed, n=fft_size, axis=-1, norm=norm)
-    return spec
+    return jnp.fft.rfft(windowed, n=fft_size, axis=-1)
 
 
 def _stft_logmag(x: jnp.ndarray, *, n_fft: int, hop_length: int, win_length: int) -> jnp.ndarray:
@@ -128,66 +121,52 @@ def l1_diff_loss(
     return _masked_mean_like(jnp.abs(y_diff - y_hat_diff), diff_mask)
 
 
-def stft_logmag_l1_loss(
+# Frequency bands (Hz) of the band losses: (low, high], the top band ends at Nyquist.
+LOSS_BANDS = {"500_1000hz": (500.0, 1000.0), "1000_2500hz": (1000.0, 2500.0)}
+
+
+def band_l1_loss(
     y: jnp.ndarray,
     y_hat: jnp.ndarray,
     *,
-    n_fft: int = 256,
-    hop_length: int = 64,
-    win_length: int = 256,
+    low_hz: float,
+    high_hz: float,
+    sample_rate_hz: float,
     valid_mask: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
-    y_logmag = _stft_logmag(y, n_fft=n_fft, hop_length=hop_length, win_length=win_length)
-    y_hat_logmag = _stft_logmag(y_hat, n_fft=n_fft, hop_length=hop_length, win_length=win_length)
-    frame_weights = _frame_mask(
-        valid_mask,
-        frame_length=max(1, min(int(win_length), int(n_fft))),
-        hop_length=max(1, int(hop_length)),
-    )
-    return _masked_mean_like(jnp.abs(y_logmag - y_hat_logmag), frame_weights)
-
-
-def complex_stft_l1_loss(
-    y: jnp.ndarray,
-    y_hat: jnp.ndarray,
-    *,
-    n_fft: int = 128,
-    hop_length: int = 24,
-    win_length: int = 128,
-    valid_mask: jnp.ndarray | None = None,
-) -> jnp.ndarray:
-    y_spec = _stft_complex(y, n_fft=n_fft, hop_length=hop_length, win_length=win_length, norm="ortho")
-    y_hat_spec = _stft_complex(y_hat, n_fft=n_fft, hop_length=hop_length, win_length=win_length, norm="ortho")
-    diff = jnp.abs(jnp.real(y_spec) - jnp.real(y_hat_spec)) + jnp.abs(
-        jnp.imag(y_spec) - jnp.imag(y_hat_spec)
-    )
-    frame_weights = _frame_mask(
-        valid_mask,
-        frame_length=max(1, min(int(win_length), int(n_fft))),
-        hop_length=max(1, int(hop_length)),
-    )
-    return _masked_mean_like(diff, frame_weights)
-
-
-def highpass_l1_loss(
-    y: jnp.ndarray,
-    y_hat: jnp.ndarray,
-    *,
-    cutoff_hz: float | jnp.ndarray,
-    sample_rate_hz: float | jnp.ndarray = 5000.0,
-    valid_mask: jnp.ndarray | None = None,
-) -> jnp.ndarray:
-    """Time-domain L1 of the components above cutoff_hz (phase-sensitive, unlike the log-magnitude STFT terms)."""
+    """Time-domain L1 of the components in (low_hz, high_hz] (phase-sensitive: the waveform must line up)."""
     y = _ensure_batch_time(y)
     y_hat = _ensure_batch_time(y_hat)
     n = int(y.shape[-1])
-    sample_rate = jnp.asarray(sample_rate_hz, dtype=jnp.float32)
-    cutoff = jnp.asarray(cutoff_hz, dtype=jnp.float32)
-    freqs = jnp.arange(n // 2 + 1, dtype=jnp.float32) * (sample_rate / float(n))
-    keep = (freqs > cutoff).astype(jnp.float32)
-    y_hp = jnp.fft.irfft(jnp.fft.rfft(y, axis=-1) * keep[None, :], n=n, axis=-1)
-    y_hat_hp = jnp.fft.irfft(jnp.fft.rfft(y_hat, axis=-1) * keep[None, :], n=n, axis=-1)
-    return _masked_mean_like(jnp.abs(y_hp - y_hat_hp), valid_mask)
+    freqs = np.fft.rfftfreq(n, d=1.0 / float(sample_rate_hz))
+    keep = jnp.asarray((freqs > low_hz) & (freqs <= high_hz), dtype=jnp.float32)
+    diff = jnp.fft.irfft((jnp.fft.rfft(y, axis=-1) - jnp.fft.rfft(y_hat, axis=-1)) * keep[None, :], n=n, axis=-1)
+    return _masked_mean_like(jnp.abs(diff), valid_mask)
+
+
+def band_stft_logmag_l1_loss(
+    y: jnp.ndarray,
+    y_hat: jnp.ndarray,
+    *,
+    low_hz: float,
+    high_hz: float,
+    sample_rate_hz: float,
+    scales: Sequence[tuple[int, int, int]],
+    valid_mask: jnp.ndarray | None = None,
+) -> jnp.ndarray:
+    """L1 of log(1 + |STFT|) over the bins in (low_hz, high_hz], averaged over the STFT scales
+    (n_fft, win_length, hop_length). It matches how much energy each frequency has, not the phase."""
+    losses = []
+    for n_fft, win_length, hop_length in scales:
+        freqs = np.fft.rfftfreq(int(n_fft), d=1.0 / float(sample_rate_hz))
+        bins = np.nonzero((freqs > low_hz) & (freqs <= high_hz))[0]  # static, so the slice is fixed under jit
+        diff = jnp.abs(
+            _stft_logmag(y, n_fft=n_fft, hop_length=hop_length, win_length=win_length)
+            - _stft_logmag(y_hat, n_fft=n_fft, hop_length=hop_length, win_length=win_length)
+        )[..., bins]
+        frame_weights = _frame_mask(valid_mask, frame_length=min(int(win_length), int(n_fft)), hop_length=int(hop_length))
+        losses.append(_masked_mean_like(diff, frame_weights))
+    return jnp.mean(jnp.stack(losses))
 
 
 def pa_l1_loss(
@@ -206,154 +185,36 @@ def pa_l1_loss(
     return _masked_mean_like(err, valid_mask)
 
 
-def ms_stft_logmag_l1_loss(
-    y: jnp.ndarray,
-    y_hat: jnp.ndarray,
-    *,
-    scales: Sequence[tuple[int, int, int]],
-) -> jnp.ndarray:
-    losses = [
-        stft_logmag_l1_loss(
-            y,
-            y_hat,
-            n_fft=int(n_fft),
-            win_length=int(win_length),
-            hop_length=int(hop_length),
-        )
-        for n_fft, win_length, hop_length in scales
-    ]
-    if not losses:
-        return jnp.asarray(0.0, dtype=jnp.float32)
-    return jnp.mean(jnp.stack(losses))
-
-
-def _stft_scale_labels(num_scales: int) -> tuple[str, ...]:
-    if num_scales == 3:
-        return ("small", "medium", "large")
-    if num_scales == 1:
-        return ("stft",)
-    return tuple(f"scale_{idx}" for idx in range(num_scales))
-
-
 def compute_reconstruction_losses(
     *,
     y: jnp.ndarray,
     y_hat: jnp.ndarray,
-    weights: Dict[str, float | jnp.ndarray],
-    stft_loss_scales: Sequence[tuple[int, int, int]] = ((256, 256, 64),),
-    pa_half_range: jnp.ndarray | None = None,
+    weights: Dict[str, float],
+    stft_loss_scales: Sequence[tuple[int, int, int]],
+    pa_half_range: jnp.ndarray,
     valid_mask: jnp.ndarray | None = None,
-    decoder_aux: Dict[str, Any] | None = None,
 ) -> tuple[jnp.ndarray, Dict[str, jnp.ndarray]]:
-    l_time = l1_time_loss(y, y_hat, valid_mask=valid_mask)
-    l_diff1 = l1_diff_loss(y, y_hat, order=1, valid_mask=valid_mask)
-    l_diff2 = l1_diff_loss(y, y_hat, order=2, valid_mask=valid_mask)
-    dtype = l_time.dtype
-
-    def _weight(name: str, default: float | jnp.ndarray) -> jnp.ndarray:
-        return jnp.asarray(weights.get(name, default), dtype=dtype)
-
-    w_time = _weight("time_l1", 1.0)
-    w_pa = _weight("pa_l1", 0.0)
-    w_diff1 = _weight("diff1_l1", 0.0)
-    w_diff2 = _weight("diff2_l1", 0.0)
-    legacy_stft_weight = _weight("stft_logmag_l1", 0.0)
-
-    time_term = w_time * l_time
-    if pa_half_range is not None:
-        l_pa = pa_l1_loss(
-            y,
-            y_hat,
-            pa_half_range=pa_half_range,
-            scale=_weight("pa_l1_scale", 50.0),
-            valid_mask=valid_mask,
-        )
-    else:
-        l_pa = jnp.asarray(0.0, dtype=dtype)
-    pa_term = w_pa * l_pa
-    diff1_term = w_diff1 * l_diff1
-    diff2_term = w_diff2 * l_diff2
-    reconstruct = time_term + pa_term + diff1_term + diff2_term
-    total = reconstruct
-    logs = {
-        "reconstruct_loss": reconstruct,
-        "norm_l1_metric": l_time,
-        "time_l1_loss_raw": l_time,
-        "time_l1_loss": time_term,
-        "pa_l1_loss_raw": l_pa,
-        "pa_l1_loss": pa_term,
-        "diff1_loss_raw": l_diff1,
-        "diff1_loss": diff1_term,
-        "diff2_loss_raw": l_diff2,
-        "diff2_loss": diff2_term,
+    """Weighted sum of the reconstruction losses and a log entry (raw and weighted) for each."""
+    sample_rate = float(weights.get("sample_rate", 5000.0))
+    raw = {
+        "time_l1": l1_time_loss(y, y_hat, valid_mask=valid_mask),
+        "pa_l1": pa_l1_loss(y, y_hat, pa_half_range=pa_half_range, scale=weights.get("pa_l1_scale", 50.0), valid_mask=valid_mask),
+        "diff1_l1": l1_diff_loss(y, y_hat, order=1, valid_mask=valid_mask),
+        "diff2_l1": l1_diff_loss(y, y_hat, order=2, valid_mask=valid_mask),
     }
-
-    scale_labels = _stft_scale_labels(len(stft_loss_scales))
-    if len(scale_labels) != len(stft_loss_scales):
-        raise ValueError("STFT scale labels must match the number of STFT scales.")
-    for label, (n_fft, win_length, hop_length) in zip(scale_labels, stft_loss_scales):
-        raw_loss = stft_logmag_l1_loss(
-            y,
-            y_hat,
-            n_fft=int(n_fft),
-            hop_length=int(hop_length),
-            win_length=int(win_length),
-            valid_mask=valid_mask,
+    for name, (low, high) in LOSS_BANDS.items():
+        raw[f"band_l1_{name}"] = band_l1_loss(
+            y, y_hat, low_hz=low, high_hz=high, sample_rate_hz=sample_rate, valid_mask=valid_mask
         )
-        weight = _weight(f"{label}_stft_logmag_l1", legacy_stft_weight)
-        weighted_loss = weight * raw_loss
-        reconstruct = reconstruct + weighted_loss
-        total = total + weighted_loss
-        logs[f"{label}_stft_logmag_loss_raw"] = raw_loss
-        logs[f"{label}_stft_logmag_loss"] = weighted_loss
-
-    complex_weight = _weight("complex_stft_l1", 0.0)
-    if stft_loss_scales:
-        n_fft, win_length, hop_length = stft_loss_scales[0]
-    else:
-        n_fft, win_length, hop_length = (128, 128, 24)
-    complex_raw = complex_stft_l1_loss(
-        y,
-        y_hat,
-        n_fft=int(n_fft),
-        hop_length=int(hop_length),
-        win_length=int(win_length),
-        valid_mask=valid_mask,
-    )
-    complex_term = complex_weight * complex_raw
-    reconstruct = reconstruct + complex_term
-    total = total + complex_term
-    logs["complex_stft_l1_loss_raw"] = complex_raw
-    logs["complex_stft_l1_loss"] = complex_term
-
-    highpass_raw = highpass_l1_loss(
-        y,
-        y_hat,
-        cutoff_hz=1000.0,
-        sample_rate_hz=_weight("sample_rate", 5000.0),
-        valid_mask=valid_mask,
-    )
-    highpass_term = _weight("highpass_l1_1000hz", 0.0) * highpass_raw
-    reconstruct = reconstruct + highpass_term
-    total = total + highpass_term
-    logs["highpass_l1_1000hz_loss_raw"] = highpass_raw
-    logs["highpass_l1_1000hz_loss"] = highpass_term
-
-    decoder_aux = dict(decoder_aux or {})
-    residual_raw = jnp.asarray(decoder_aux.get("residual_energy_l2_raw", 0.0), dtype=dtype)
-    residual_weight = _weight("residual_energy_l2", 0.0)
-    residual_term = residual_weight * residual_raw
-    reconstruct = reconstruct + residual_term
-    total = total + residual_term
-    logs["residual_energy_l2_raw"] = residual_raw
-    logs["residual_energy_l2"] = residual_term
-    for key, value in decoder_aux.items():
-        if key in logs:
-            continue
-        arr = jnp.asarray(value)
-        if arr.ndim == 0:
-            logs[f"decoder_{key}"] = arr.astype(dtype)
-
-    logs["reconstruct_loss"] = reconstruct
-
+        raw[f"stft_logmag_{name}"] = band_stft_logmag_l1_loss(
+            y, y_hat, low_hz=low, high_hz=high, sample_rate_hz=sample_rate, scales=stft_loss_scales, valid_mask=valid_mask
+        )
+    total = jnp.asarray(0.0, dtype=jnp.float32)
+    logs = {"norm_l1_metric": raw["time_l1"]}
+    for key, value in raw.items():
+        term = float(weights.get(key, 0.0)) * value
+        total = total + term
+        logs[f"{key}_loss_raw"] = value
+        logs[f"{key}_loss"] = term
+    logs["reconstruct_loss"] = total
     return total, logs

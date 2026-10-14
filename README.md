@@ -18,10 +18,11 @@ codec/
 configs/
   offline-high.json
 train.py
+validate.py
 requirements.txt
 ```
 
-Only `configs/offline-high.json` is the retained training configuration. Earlier experimental configs, validation scripts, post-training scripts, and internal analysis outputs are not part of the public reproduction path.
+Only `configs/offline-high.json` is the retained training configuration. Earlier experimental configs, post-training scripts, and internal analysis outputs are not part of the public reproduction path.
 
 ## Environment
 
@@ -89,6 +90,43 @@ Models trained by this code are run with the NanoRecon app. The weights released
 change (<https://huggingface.co/GHSSHG/NanoRecon>) were trained with noisy DiVeQ gradients
 (`diveq_sigma2=1e-3`) and their `config.json` is not accepted by this code.
 
+## Decoder
+
+The decoder is Vocos-style: a ConvNeXt backbone (with a small attention block in front) predicts
+the complex spectrum of each latent frame (`istft_n_fft // 2 + 1` bins, real and imaginary parts),
+and an inverse STFT with `istft_hop_length` = 16 samples, one latent frame, turns it into the
+waveform (`istft_n_fft` 64, a 4x overlap).
+
+## Losses
+
+`train.loss_weights` (reconstruction losses on chunks normalized to [-1, 1]):
+
+- `pa_l1`: L1 in picoamps (error × chunk half-range / `train.loss.pa_l1_scale`); mostly the low
+  frequencies, which carry almost all of the signal energy.
+- `diff1_l1`, `diff2_l1`: L1 of the first and second differences (edges and their shape; weighted
+  toward high frequencies).
+- `band_l1_500_1000hz`, `band_l1_1000_2500hz`: time-domain L1 of the 500-1000 Hz and 1000-2500 Hz
+  components, so the high-frequency waveform has to line up with the original.
+- `stft_logmag_500_1000hz`, `stft_logmag_1000_2500hz`: L1 of log(1 + |STFT|) over the bins of the same
+  two bands, averaged over the `train.stft_loss.scales`; keeps the high-frequency energy at the
+  original level instead of shrinking it.
+- `vq_codebook`, `vq_commitment`: see Quantization.
+
+## Validation
+
+With `validation.enabled`, every checkpoint is validated in the background on GPU
+`validation.gpu` (shared with training): `validate.py` reconstructs the held-out POD5
+`validation.source_pod5` from codewords, basecalls it with Dorado and reports the identity and
+empirical Q against `validation.truth_fastq` (overall and per flow cell), the ADC MAE, and per
+frequency band the amplitude of the correctly reconstructed part and the energy of the wrong part.
+Results go to `<checkpoint dir>/validation/step_<N>/summary.json`, one line per checkpoint in
+`<checkpoint dir>/validation/summary.jsonl`. It takes about 5-8 minutes. Run it by hand with
+
+```bash
+python validate.py --config configs/offline-high.json \
+  --checkpoint checkpoints/<run>/periodic/checkpoint_<step> --out /tmp/val
+```
+
 ## Model Interface
 
 ```python
@@ -136,7 +174,7 @@ python train.py \
 
 Resume with `--resume checkpoints/<run>/periodic/checkpoint_<step>`.
 
-Checkpoints are written under `checkpoint.root_dir/<run name>` (default `checkpoints/offline-high-vqaux`),
+Checkpoints are written under `checkpoint.root_dir/<run name>` (default `checkpoints/offline-high-vocos`),
 which is ignored by Git. Training refuses to start in a non-empty checkpoint directory unless it resumes.
 
 ## Configuration Notes
