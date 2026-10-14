@@ -174,7 +174,7 @@ python train.py \
 
 Resume with `--resume checkpoints/<run>/periodic/checkpoint_<step>`.
 
-Checkpoints are written under `checkpoint.root_dir/<run name>` (default `checkpoints/offline-high-vocos`),
+Checkpoints are written under `checkpoint.root_dir/<run name>` (default `checkpoints/offline-high-vocos-pa1`),
 which is ignored by Git. Training refuses to start in a non-empty checkpoint directory unless it resumes.
 
 ## Configuration Notes

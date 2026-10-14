@@ -13,7 +13,7 @@
     },
     "loss_weights": {
       "time_l1": 0.0,
-      "pa_l1": 0.5,
+      "pa_l1": 1.0,
       "diff1_l1": 1.0,
       "diff2_l1": 0.5,
       "band_l1_500_1000hz": 1.5,
@@ -122,7 +122,7 @@
     "wandb": {
       "enabled": true,
       "project": "Nanopore Reconstruction",
-      "run_name": "offline-high-vocos"
+      "run_name": "offline-high-vocos-pa1"
     }
   },
   "optim": {
