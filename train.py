@@ -25,21 +25,11 @@ enable_jax_compilation_cache()
 
 from codec.data import Pod5ChunkDataset
 from codec.train import train_model_from_pod5
+from codec.train.losses import LOSS_BANDS
 from codec.utils import discover_pod5_files, init_wandb
 
 LOSS_WEIGHT_KEYS = frozenset(
-    {
-        "time_l1",
-        "pa_l1",
-        "diff1_l1",
-        "diff2_l1",
-        "band_l1_500_1000hz",
-        "band_l1_1000_2500hz",
-        "stft_logmag_500_1000hz",
-        "stft_logmag_1000_2500hz",
-        "vq_codebook",
-        "vq_commitment",
-    }
+    {f"{kind}_{band}" for kind in ("band_l1", "stft_logmag") for band in LOSS_BANDS} | {"vq_codebook", "vq_commitment"}
 )
 
 

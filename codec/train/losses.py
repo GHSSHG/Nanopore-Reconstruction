@@ -24,17 +24,6 @@ def _ensure_batch_time(x: jnp.ndarray) -> jnp.ndarray:
     return x
 
 
-def _finite_difference(x: jnp.ndarray, *, order: int) -> jnp.ndarray:
-    if order < 0:
-        raise ValueError(f"Difference order must be >= 0, got {order}")
-    diff = x
-    for _ in range(order):
-        if int(diff.shape[-1]) <= 1:
-            return jnp.zeros(diff.shape[:-1] + (1,), dtype=diff.dtype)
-        diff = diff[..., 1:] - diff[..., :-1]
-    return diff
-
-
 def _hann_window(length: int, *, dtype: jnp.dtype) -> jnp.ndarray:
     if length <= 1:
         return jnp.ones((max(1, int(length)),), dtype=dtype)
@@ -96,33 +85,18 @@ def l1_time_loss(y: jnp.ndarray, y_hat: jnp.ndarray, *, valid_mask: jnp.ndarray 
     return _masked_mean_like(jnp.abs(y - y_hat), valid_mask)
 
 
-def l1_diff_loss(
-    y: jnp.ndarray,
-    y_hat: jnp.ndarray,
-    *,
-    order: int,
-    valid_mask: jnp.ndarray | None = None,
-) -> jnp.ndarray:
-    y = _ensure_batch_time(y)
-    y_hat = _ensure_batch_time(y_hat)
-    y_diff = _finite_difference(y, order=order)
-    y_hat_diff = _finite_difference(y_hat, order=order)
-    diff_mask = None
-    if valid_mask is not None:
-        mask = _ensure_batch_time(valid_mask).astype(jnp.float32)
-        if order == 1:
-            diff_mask = mask[..., 1:] * mask[..., :-1]
-        elif order == 2:
-            diff_mask = mask[..., 2:] * mask[..., 1:-1] * mask[..., :-2]
-        elif order > 0:
-            diff_mask = mask
-            for _ in range(order):
-                diff_mask = diff_mask[..., 1:] * diff_mask[..., :-1]
-    return _masked_mean_like(jnp.abs(y_diff - y_hat_diff), diff_mask)
+# Frequency bands (Hz) of the band losses: (low, high], the first band includes DC and the top
+# band ends at Nyquist. Together they cover the whole spectrum once.
+LOSS_BANDS = {
+    "0_500hz": (0.0, 500.0),
+    "500_1000hz": (500.0, 1000.0),
+    "1000_2000hz": (1000.0, 2000.0),
+    "2000_2500hz": (2000.0, 2500.0),
+}
 
 
-# Frequency bands (Hz) of the band losses: (low, high], the top band ends at Nyquist.
-LOSS_BANDS = {"500_1000hz": (500.0, 1000.0), "1000_2500hz": (1000.0, 2500.0)}
+def _band(freqs: np.ndarray, low_hz: float, high_hz: float) -> np.ndarray:
+    return ((freqs > low_hz) | (low_hz <= 0.0)) & (freqs <= high_hz)
 
 
 def band_l1_loss(
@@ -132,16 +106,19 @@ def band_l1_loss(
     low_hz: float,
     high_hz: float,
     sample_rate_hz: float,
+    pa_half_range: jnp.ndarray,
+    pa_scale: float = 50.0,
     valid_mask: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
-    """Time-domain L1 of the components in (low_hz, high_hz] (phase-sensitive: the waveform must line up)."""
+    """Time-domain L1 of the error's components in the band (phase-sensitive: the waveform must
+    line up), in pA / pa_scale: each chunk's error is scaled back by its half range."""
     y = _ensure_batch_time(y)
     y_hat = _ensure_batch_time(y_hat)
     n = int(y.shape[-1])
-    freqs = np.fft.rfftfreq(n, d=1.0 / float(sample_rate_hz))
-    keep = jnp.asarray((freqs > low_hz) & (freqs <= high_hz), dtype=jnp.float32)
+    keep = jnp.asarray(_band(np.fft.rfftfreq(n, d=1.0 / float(sample_rate_hz)), low_hz, high_hz), dtype=jnp.float32)
     diff = jnp.fft.irfft((jnp.fft.rfft(y, axis=-1) - jnp.fft.rfft(y_hat, axis=-1)) * keep[None, :], n=n, axis=-1)
-    return _masked_mean_like(jnp.abs(diff), valid_mask)
+    half_range = jnp.asarray(pa_half_range, dtype=jnp.float32).reshape((-1, 1))
+    return _masked_mean_like(jnp.abs(diff) * half_range / float(pa_scale), valid_mask)
 
 
 def band_stft_logmag_l1_loss(
@@ -154,12 +131,12 @@ def band_stft_logmag_l1_loss(
     scales: Sequence[tuple[int, int, int]],
     valid_mask: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
-    """L1 of log(1 + |STFT|) over the bins in (low_hz, high_hz], averaged over the STFT scales
+    """L1 of log(1 + |STFT|) over the bins in the band, averaged over the STFT scales
     (n_fft, win_length, hop_length). It matches how much energy each frequency has, not the phase."""
     losses = []
     for n_fft, win_length, hop_length in scales:
         freqs = np.fft.rfftfreq(int(n_fft), d=1.0 / float(sample_rate_hz))
-        bins = np.nonzero((freqs > low_hz) & (freqs <= high_hz))[0]  # static, so the slice is fixed under jit
+        bins = np.nonzero(_band(freqs, low_hz, high_hz))[0]  # static, so the slice is fixed under jit
         diff = jnp.abs(
             _stft_logmag(y, n_fft=n_fft, hop_length=hop_length, win_length=win_length)
             - _stft_logmag(y_hat, n_fft=n_fft, hop_length=hop_length, win_length=win_length)
@@ -167,22 +144,6 @@ def band_stft_logmag_l1_loss(
         frame_weights = _frame_mask(valid_mask, frame_length=min(int(win_length), int(n_fft)), hop_length=int(hop_length))
         losses.append(_masked_mean_like(diff, frame_weights))
     return jnp.mean(jnp.stack(losses))
-
-
-def pa_l1_loss(
-    y: jnp.ndarray,
-    y_hat: jnp.ndarray,
-    *,
-    pa_half_range: jnp.ndarray,
-    scale: float | jnp.ndarray = 50.0,
-    valid_mask: jnp.ndarray | None = None,
-) -> jnp.ndarray:
-    y = _ensure_batch_time(y)
-    y_hat = _ensure_batch_time(y_hat)
-    half_range = jnp.asarray(pa_half_range, dtype=jnp.float32).reshape((-1, 1))
-    scale_arr = jnp.maximum(jnp.asarray(scale, dtype=jnp.float32), 1e-6)
-    err = jnp.abs(y - y_hat) * half_range / scale_arr
-    return _masked_mean_like(err, valid_mask)
 
 
 def compute_reconstruction_losses(
@@ -194,27 +155,29 @@ def compute_reconstruction_losses(
     pa_half_range: jnp.ndarray,
     valid_mask: jnp.ndarray | None = None,
 ) -> tuple[jnp.ndarray, Dict[str, jnp.ndarray]]:
-    """Weighted sum of the reconstruction losses and a log entry (raw and weighted) for each."""
+    """Weighted sum of the band losses and a log entry (raw and weighted) for each. Terms with
+    zero weight are not computed; the normalized time-domain L1 is always logged as a metric."""
     sample_rate = float(weights.get("sample_rate", 5000.0))
-    raw = {
-        "time_l1": l1_time_loss(y, y_hat, valid_mask=valid_mask),
-        "pa_l1": pa_l1_loss(y, y_hat, pa_half_range=pa_half_range, scale=weights.get("pa_l1_scale", 50.0), valid_mask=valid_mask),
-        "diff1_l1": l1_diff_loss(y, y_hat, order=1, valid_mask=valid_mask),
-        "diff2_l1": l1_diff_loss(y, y_hat, order=2, valid_mask=valid_mask),
-    }
-    for name, (low, high) in LOSS_BANDS.items():
-        raw[f"band_l1_{name}"] = band_l1_loss(
-            y, y_hat, low_hz=low, high_hz=high, sample_rate_hz=sample_rate, valid_mask=valid_mask
-        )
-        raw[f"stft_logmag_{name}"] = band_stft_logmag_l1_loss(
-            y, y_hat, low_hz=low, high_hz=high, sample_rate_hz=sample_rate, scales=stft_loss_scales, valid_mask=valid_mask
-        )
     total = jnp.asarray(0.0, dtype=jnp.float32)
-    logs = {"norm_l1_metric": raw["time_l1"]}
-    for key, value in raw.items():
-        term = float(weights.get(key, 0.0)) * value
-        total = total + term
-        logs[f"{key}_loss_raw"] = value
-        logs[f"{key}_loss"] = term
+    logs = {"norm_l1_metric": l1_time_loss(y, y_hat, valid_mask=valid_mask)}
+    for name, (low, high) in LOSS_BANDS.items():
+        terms = {
+            f"band_l1_{name}": lambda: band_l1_loss(
+                y, y_hat, low_hz=low, high_hz=high, sample_rate_hz=sample_rate, pa_half_range=pa_half_range,
+                pa_scale=weights.get("pa_l1_scale", 50.0), valid_mask=valid_mask,
+            ),
+            f"stft_logmag_{name}": lambda: band_stft_logmag_l1_loss(
+                y, y_hat, low_hz=low, high_hz=high, sample_rate_hz=sample_rate, scales=stft_loss_scales,
+                valid_mask=valid_mask,
+            ),
+        }
+        for key, loss in terms.items():
+            weight = float(weights.get(key, 0.0))
+            if weight == 0.0:
+                continue
+            value = loss()
+            total = total + weight * value
+            logs[f"{key}_loss_raw"] = value
+            logs[f"{key}_loss"] = weight * value
     logs["reconstruct_loss"] = total
     return total, logs

@@ -99,17 +99,16 @@ waveform (`istft_n_fft` 64, a 4x overlap).
 
 ## Losses
 
-`train.loss_weights` (reconstruction losses on chunks normalized to [-1, 1]):
+`train.loss_weights` (reconstruction losses on chunks normalized to [-1, 1]), per frequency band
+`0_500hz`, `500_1000hz`, `1000_2000hz` and `2000_2500hz` (the first includes DC, the last ends at
+Nyquist); a term with weight 0 is not computed:
 
-- `pa_l1`: L1 in picoamps (error × chunk half-range / `train.loss.pa_l1_scale`); mostly the low
-  frequencies, which carry almost all of the signal energy.
-- `diff1_l1`, `diff2_l1`: L1 of the first and second differences (edges and their shape; weighted
-  toward high frequencies).
-- `band_l1_500_1000hz`, `band_l1_1000_2500hz`: time-domain L1 of the 500-1000 Hz and 1000-2500 Hz
-  components, so the high-frequency waveform has to line up with the original.
-- `stft_logmag_500_1000hz`, `stft_logmag_1000_2500hz`: L1 of log(1 + |STFT|) over the bins of the same
-  two bands, averaged over the `train.stft_loss.scales`; keeps the high-frequency energy at the
-  original level instead of shrinking it.
+- `band_l1_<band>`: time-domain L1 of the error's components in the band, in picoamps (error ×
+  chunk half-range / `train.loss.pa_l1_scale`), so the waveform has to line up with the original.
+- `stft_logmag_<band>`: L1 of log(1 + |STFT|) over the band's bins, averaged over the
+  `train.stft_loss.scales`; matches the energy at each frequency, not the phase. Dorado does not
+  use 2-2.5 kHz, so that band only gets a small STFT weight (its level stays natural without
+  spending codewords on its waveform).
 - `vq_codebook`, `vq_commitment`: see Quantization.
 
 ## Validation
