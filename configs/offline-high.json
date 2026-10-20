@@ -66,7 +66,7 @@
     ],
     "enc_kernel_size": 7,
     "latent_dim": 512,
-    "quantizer_dim": 64,
+    "quantizer_dim": 32,
     "codebook_size": 262144,
     "dec_channels": [
       512
@@ -122,7 +122,7 @@
     "wandb": {
       "enabled": true,
       "project": "Nanopore Reconstruction",
-      "run_name": "offline-high-bands-k262144-d64"
+      "run_name": "offline-high-bands-k262144-d32"
     }
   },
   "optim": {
