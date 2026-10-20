@@ -54,7 +54,7 @@ def _resolve_path(value: str, base: Path) -> Path:
     if "${" in expanded:
         raise ValueError(
             f"Path {value!r} contains an unset environment variable. Set DATA_PATH to the directory "
-            "that contains hereditary_cancer_2025.09, or edit data.root in the config."
+            "that contains hg002_giab2025.01, or edit data.root in the config."
         )
     path = Path(expanded).expanduser()
     return path if path.is_absolute() else (base / path).resolve()

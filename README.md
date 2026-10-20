@@ -41,38 +41,35 @@ The config enables Weights & Biases logging (`logging.wandb.enabled`). Install `
 
 ## Dataset
 
-The training config expects POD5 data from Oxford Nanopore's hereditary cancer example dataset, arranged as:
+The training config expects the HG002 POD5 data of Oxford Nanopore's GIAB 2025.01 open dataset (R10.4.1, 5 kHz, two PromethION flow cells), arranged as:
 
 ```text
-hereditary_cancer_2025.09/
-  raw/
-    FC01/
-      pod5/
-        *.pod5
-    FC02/
-      pod5/
-    FC03/
-      pod5/
+hg002_giab2025.01/
+  pod5/
+    PAW70337/
+      *.pod5
+    PAW71238/
+      *.pod5
 ```
 
 Dataset source:
 
-<https://epi2me.nanoporetech.com/hereditary_cancer_2025.09/>
+<https://epi2me.nanoporetech.com/giab-2025.01/>
 
 The committed config uses an environment-variable placeholder:
 
 ```json
-"root": "${DATA_PATH}/hereditary_cancer_2025.09/raw"
+"root": "${DATA_PATH}/hg002_giab2025.01/pod5"
 ```
 
-Set `DATA_PATH` to the directory that contains `hereditary_cancer_2025.09`, then run training:
+Set `DATA_PATH` to the directory that contains `hg002_giab2025.01`, then run training:
 
 ```bash
 export DATA_PATH=/path/to/datasets
 python train.py --config configs/offline-high.json
 ```
 
-The loader reads the POD5 files of `FC01/pod5`, `FC02/pod5` and `FC03/pod5` under `${DATA_PATH}/hereditary_cancer_2025.09/raw` (one epoch over all three flow cells, files in a seeded random order).
+The loader reads the POD5 files of `PAW70337` and `PAW71238` under `${DATA_PATH}/hg002_giab2025.01/pod5` (one epoch over both flow cells, files in a seeded random order).
 
 The dataset files themselves are not included in this repository.
 

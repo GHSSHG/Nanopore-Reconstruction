@@ -87,11 +87,10 @@
     "post_quant_conv_kernel_size": 7
   },
   "data": {
-    "root": "${DATA_PATH}/hereditary_cancer_2025.09/raw",
+    "root": "${DATA_PATH}/hg002_giab2025.01/pod5",
     "subdirs": [
-      "FC01/pod5",
-      "FC02/pod5",
-      "FC03/pod5"
+      "PAW70337",
+      "PAW71238"
     ],
     "sample_rate": 5000,
     "segment_samples": 8192,
@@ -122,7 +121,7 @@
     "wandb": {
       "enabled": true,
       "project": "Nanopore Reconstruction",
-      "run_name": "offline-high-bands-k262144-d32"
+      "run_name": "offline-high-bands-k262144-d32-hg002"
     }
   },
   "optim": {
