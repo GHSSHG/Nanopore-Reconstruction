@@ -69,7 +69,7 @@ export DATA_PATH=/path/to/datasets
 python train.py --config configs/offline-high.json
 ```
 
-The loader reads five POD5 files of flow cell `PAW70337` (about 75 GB, listed in `data.subdirs`; an entry may be a directory or a single `.pod5` file) under `${DATA_PATH}/hg002_giab2025.01/pod5`, one epoch in a seeded random file order.
+The loader reads three POD5 files of flow cell `PAW70337` (about 42 GB, listed in `data.subdirs`; an entry may be a directory or a single `.pod5` file) under `${DATA_PATH}/hg002_giab2025.01/pod5`, one epoch in a seeded random file order.
 
 Every `train.temp_every_steps` steps the training loop reads the GPU temperatures with `nvidia-smi`; when any GPU is at or above `train.temp_pause` (80 degC) it pauses until every GPU is at or below `train.temp_resume` (72 degC). Temperatures and paused seconds are logged to W&B.
 

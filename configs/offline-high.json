@@ -94,9 +94,7 @@
     "subdirs": [
       "PAW70337/PAW70337_66b2eea5_de8117b1_115.pod5",
       "PAW70337/PAW70337_66b2eea5_de8117b1_121.pod5",
-      "PAW70337/PAW70337_66b2eea5_de8117b1_123.pod5",
-      "PAW70337/PAW70337_66b2eea5_de8117b1_126.pod5",
-      "PAW70337/PAW70337_66b2eea5_de8117b1_148.pod5"
+      "PAW70337/PAW70337_66b2eea5_de8117b1_123.pod5"
     ],
     "sample_rate": 5000,
     "segment_samples": 8192,
