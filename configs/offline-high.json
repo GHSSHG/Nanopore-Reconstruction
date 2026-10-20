@@ -7,6 +7,9 @@
     "warmup_steps": 10000,
     "grad_clip": 1.0,
     "log_every_steps": 500,
+    "temp_every_steps": 20,
+    "temp_pause": 80,
+    "temp_resume": 72,
     "prefetch_batches": 8,
     "loss": {
       "pa_l1_scale": 50.0
@@ -89,8 +92,11 @@
   "data": {
     "root": "${DATA_PATH}/hg002_giab2025.01/pod5",
     "subdirs": [
-      "PAW70337",
-      "PAW71238"
+      "PAW70337/PAW70337_66b2eea5_de8117b1_115.pod5",
+      "PAW70337/PAW70337_66b2eea5_de8117b1_121.pod5",
+      "PAW70337/PAW70337_66b2eea5_de8117b1_123.pod5",
+      "PAW70337/PAW70337_66b2eea5_de8117b1_126.pod5",
+      "PAW70337/PAW70337_66b2eea5_de8117b1_148.pod5"
     ],
     "sample_rate": 5000,
     "segment_samples": 8192,

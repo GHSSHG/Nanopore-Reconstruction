@@ -9,6 +9,8 @@ def discover_pod5_files(root: Path, subdirs: Sequence[str] | None = None) -> Lis
     files: list[Path] = []
     for sd in subdirs:
         d = (root / sd).resolve()
-        if d.exists():
+        if d.is_file():
+            files.append(d)
+        elif d.exists():
             files += sorted(d.rglob("*.pod5"))
     return files

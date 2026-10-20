@@ -159,6 +159,9 @@ def main() -> None:
             max_steps_per_epoch=args.max_steps_per_epoch,
             wandb_logger=wandb_logger,
             on_checkpoint=_validation_launcher(cfg_path, ckpt_dir, cfg.get("validation", {})),
+            temp_every_steps=int(train_cfg.get("temp_every_steps", 20)),
+            temp_pause=float(train_cfg.get("temp_pause", 80.0)),
+            temp_resume=float(train_cfg.get("temp_resume", 72.0)),
         )
     finally:
         if wandb_logger is not None:

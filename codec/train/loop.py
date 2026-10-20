@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict
@@ -20,6 +21,28 @@ def _host_broadcast(tree: Any, ndev: int) -> Any:
     host memory. Not jax_utils.replicate: it fills the other GPUs by GPU-to-GPU copies, which
     arrive corrupted on the lab server (GPU1-3 then train on garbage weights)."""
     return jax.tree_util.tree_map(lambda x: np.broadcast_to(np.asarray(x), (ndev,) + np.shape(x)).copy(), jax.device_get(tree))
+
+
+def _gpu_temps() -> list[int]:
+    """Temperature (degC) of every GPU in the machine."""
+    out = subprocess.run(["nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"],
+                         capture_output=True, text=True, check=True).stdout
+    return [int(t) for t in out.split()]
+
+
+def _temperature_guard(pause: float, resume: float, log: Callable[[str], None], wait: float = 10.0) -> float:
+    """If any GPU is at or above `pause` degC, sleep until every GPU is at or below `resume`.
+    Returns the seconds spent here."""
+    temps = _gpu_temps()
+    if max(temps) < pause:
+        return 0.0
+    t0 = time.perf_counter()
+    log(f"[temp] {max(temps)} degC, pausing until every GPU is <= {resume:.0f}")
+    while max(temps) > resume:
+        time.sleep(wait)
+        temps = _gpu_temps()
+    log(f"[temp] resumed after {time.perf_counter() - t0:.0f} s")
+    return time.perf_counter() - t0
 
 
 def train_model_from_pod5(
@@ -44,6 +67,9 @@ def train_model_from_pod5(
     max_steps_per_epoch: int | None = None,
     wandb_logger: Any | None = None,
     on_checkpoint: Callable[[int, str], None] | None = None,
+    temp_every_steps: int = 20,
+    temp_pause: float = 80.0,
+    temp_resume: float = 72.0,
 ):
     from ..models import build_audio_model
 
@@ -103,7 +129,7 @@ def train_model_from_pod5(
 
     global_step = int(jax.device_get(state.step[0]))
     window: list[Dict[str, Any]] = []
-    window_start, data_wait = time.perf_counter(), 0.0
+    window_start, data_wait, paused = time.perf_counter(), 0.0, 0.0
     saved_step = global_step
     try:
         for epoch in range(1, int(num_epochs) + 1):
@@ -122,20 +148,25 @@ def train_model_from_pod5(
                 window.append(logs)
                 steps_this_epoch += 1
                 global_step += 1
+                if temp_every_steps > 0 and global_step % temp_every_steps == 0:
+                    paused += _temperature_guard(temp_pause, temp_resume, _log)
 
                 if log_every_steps > 0 and global_step % log_every_steps == 0:
                     host = jax.device_get(window)
                     means = {k: float(np.mean([w[k][0] for w in host])) for k in host[0]}
                     # Codebook statistics over every code chosen in the window, all devices.
                     means.update(codebook_stats(jax.device_get(counts).sum(axis=0)))
-                    elapsed = time.perf_counter() - window_start
-                    perf = {"step_ms": 1000.0 * elapsed / len(window), "data_wait_ms": 1000.0 * data_wait / len(window)}
+                    elapsed = time.perf_counter() - window_start - paused
+                    perf = {"step_ms": 1000.0 * elapsed / len(window), "data_wait_ms": 1000.0 * data_wait / len(window),
+                            "paused_s": paused}
+                    temps = {f"gpu{i}/temp": t for i, t in enumerate(_gpu_temps())}
                     _log(f"[step {global_step}] " + ", ".join(f"{k}={v:.4f}" for k, v in sorted(means.items())))
-                    _log(f"[perf step {global_step}] step_ms={perf['step_ms']:.1f}, data_wait_ms={perf['data_wait_ms']:.1f}")
+                    _log(f"[perf step {global_step}] step_ms={perf['step_ms']:.1f}, data_wait_ms={perf['data_wait_ms']:.1f}, "
+                         f"paused_s={paused:.0f}, temps={list(temps.values())}")
                     if wandb_logger is not None:
-                        wandb_logger.log({**means, **{f"perf/{k}": v for k, v in perf.items()}}, step=global_step)
+                        wandb_logger.log({**means, **{f"perf/{k}": v for k, v in perf.items()}, **temps}, step=global_step)
                     window, counts = [], _zero_counts()
-                    window_start, data_wait = time.perf_counter(), 0.0
+                    window_start, data_wait, paused = time.perf_counter(), 0.0, 0.0
 
                 if checkpoint_every_steps > 0 and global_step % checkpoint_every_steps == 0:
                     _save(global_step)
