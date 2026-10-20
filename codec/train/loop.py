@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import subprocess
+import functools
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict
@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict
 import jax
 import numpy as np
 import optax
+import pynvml
 from flax import jax_utils
 from flax.training import checkpoints as flax_ckpt
 
@@ -23,11 +24,15 @@ def _host_broadcast(tree: Any, ndev: int) -> Any:
     return jax.tree_util.tree_map(lambda x: np.broadcast_to(np.asarray(x), (ndev,) + np.shape(x)).copy(), jax.device_get(tree))
 
 
+@functools.cache
+def _nvml_handles() -> list[Any]:
+    pynvml.nvmlInit()
+    return [pynvml.nvmlDeviceGetHandleByIndex(i) for i in range(pynvml.nvmlDeviceGetCount())]
+
+
 def _gpu_temps() -> list[int]:
-    """Temperature (degC) of every GPU in the machine."""
-    out = subprocess.run(["nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"],
-                         capture_output=True, text=True, check=True).stdout
-    return [int(t) for t in out.split()]
+    """Temperature (degC) of every GPU in the machine (NVML)."""
+    return [pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU) for h in _nvml_handles()]
 
 
 def _temperature_guard(pause: float, resume: float, log: Callable[[str], None], wait: float = 10.0) -> float:
