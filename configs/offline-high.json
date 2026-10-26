@@ -121,9 +121,9 @@
     "batch_size": 64,
     "overlap_samples": 144,
     "band_reads": 100,
-    "source_pod5": "tmp/Compress/Work/true_valid_original.pod5",
-    "truth_fastq": "tmp/fig5_errorbar/truth/truth.fastq",
-    "truth_meta": "tmp/fig5_errorbar/truth/truth_meta.jsonl",
+    "source_pod5": "tmp/hg002_valid/valid.pod5",
+    "truth_fastq": "tmp/hg002_valid/truth.fastq",
+    "truth_meta": "tmp/hg002_valid/truth_meta.jsonl",
     "dorado_bin": "~/Download/dorado/dorado-1.4.0-linux-x64/bin/dorado",
     "dorado_model": "~/Download/dorado/models/dna_r10.4.1_e8.2_400bps_sup@v5.2.0"
   },
