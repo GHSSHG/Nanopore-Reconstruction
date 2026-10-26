@@ -21,6 +21,8 @@ class SimVQAudioModel(nn.Module):
     latent_dim: int = 512
     quantizer_dim: int | None = 512
     codebook_size: int = 16384
+    quantizer_l2_normalize: bool = False
+    quantizer_learn_codebook: bool = False
     dec_channels: Tuple[int, ...] = (512,)
     enc_kernel_size: int = 7
     enc_dtype: Any = jnp.float32
@@ -112,7 +114,12 @@ class SimVQAudioModel(nn.Module):
             param_dtype=quant_path_dtype,
             name="post_quant_conv",
         )
-        self.quantizer = SimVQ1D(codebook_size=self.codebook_size, code_dim=quantizer_dim)
+        self.quantizer = SimVQ1D(
+            codebook_size=self.codebook_size,
+            code_dim=quantizer_dim,
+            l2_normalize=bool(self.quantizer_l2_normalize),
+            learn_codebook=bool(self.quantizer_learn_codebook),
+        )
         if int(self.latent_bilstm_layers) > 0:
             self.latent_bilstm = ResidualBiLSTM1D(
                 dim=int(self.latent_dim),

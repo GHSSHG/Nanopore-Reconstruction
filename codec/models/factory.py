@@ -62,6 +62,8 @@ def _foundation_defaults() -> dict[str, Any]:
         "latent_dim": 512,
         "quantizer_dim": 512,
         "codebook_size": 16384,
+        "quantizer_l2_normalize": False,
+        "quantizer_learn_codebook": False,
         "dec_channels": (512,),
         "decoder_dim": 512,
         "decoder_intermediate_dim": 1536,
@@ -175,6 +177,8 @@ def build_audio_model(model_cfg: dict[str, Any] | None) -> SimVQAudioModel:
             None if merged_cfg.get("quantizer_dim") is None else int(merged_cfg.get("quantizer_dim"))
         ),
         codebook_size=int(merged_cfg.get("codebook_size", 16384)),
+        quantizer_l2_normalize=bool(merged_cfg["quantizer_l2_normalize"]),
+        quantizer_learn_codebook=bool(merged_cfg["quantizer_learn_codebook"]),
         dec_channels=_tuple_cfg(merged_cfg, "dec_channels", (512,)),
         enc_kernel_size=int(merged_cfg.get("enc_kernel_size", 7)),
         enc_dtype=cnn_dtype,

@@ -12,11 +12,18 @@ from .losses import compute_reconstruction_losses
 _ENCODER_LOG_KEYS = ("vq_codebook_loss", "vq_commitment_loss", "q_z_dist", "z_norm", "code_norm")
 
 
-def make_train_step(loss_weights: Dict[str, float], stft_loss_scales: tuple[tuple[int, int, int], ...], codebook_size: int):
+def make_train_step(
+    loss_weights: Dict[str, float],
+    stft_loss_scales: tuple[tuple[int, int, int], ...],
+    codebook_size: int,
+    ema_decay: float,
+):
     """Data-parallel train step over the local devices: (replicated state, sharded batch,
     per-device code counts) -> (new state, logs averaged over devices, code counts). The model is
     deterministic, so no random keys. Each device counts the codes it chose (no communication);
-    the host sums the devices' counts once per logging window for the codebook statistics."""
+    the host sums the devices' counts once per logging window for the codebook statistics.
+    state.ema_params follows the params with decay min(ema_decay, (1 + step) / (10 + step)), so
+    the average is not dominated by the random initialization early on."""
     w_codebook = float(loss_weights.get("vq_codebook", 0.0))
     w_commitment = float(loss_weights.get("vq_commitment", 0.0))
 
@@ -40,7 +47,11 @@ def make_train_step(loss_weights: Dict[str, float], stft_loss_scales: tuple[tupl
         (_, (logs, indices)), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
         grads = jax.lax.pmean(grads, "data")
         counts = counts + jnp.bincount(indices.reshape(-1), length=codebook_size)
-        return state.apply_gradients(grads=grads), jax.lax.pmean(logs, "data"), counts
+        state = state.apply_gradients(grads=grads)
+        step = state.step.astype(jnp.float32)
+        decay = jnp.minimum(ema_decay, (1.0 + step) / (10.0 + step))
+        ema = jax.tree_util.tree_map(lambda e, p: decay * e + (1.0 - decay) * p, state.ema_params, state.params)
+        return state.replace(ema_params=ema), jax.lax.pmean(logs, "data"), counts
 
     return train_step
 

@@ -1,10 +1,14 @@
 {
   "seed": 42,
   "train": {
-    "epochs": 1,
-    "batch_size": 64,
+    "epochs": 10,
+    "max_steps": 160000,
+    "batch_size": 16,
     "learning_rate": 0.0001,
-    "warmup_steps": 10000,
+    "warmup_steps": 5000,
+    "lr_schedule": "cosine",
+    "lr_end_ratio": 0.1,
+    "ema_decay": 0.9999,
     "grad_clip": 1.0,
     "log_every_steps": 500,
     "temp_every_steps": 20,
@@ -71,6 +75,8 @@
     "latent_dim": 512,
     "quantizer_dim": 32,
     "codebook_size": 262144,
+    "quantizer_l2_normalize": true,
+    "quantizer_learn_codebook": false,
     "dec_channels": [
       512
     ],
@@ -111,7 +117,7 @@
   },
   "validation": {
     "enabled": true,
-    "gpu": 0,
+    "gpu": null,
     "batch_size": 64,
     "overlap_samples": 144,
     "band_reads": 100,
@@ -125,7 +131,7 @@
     "wandb": {
       "enabled": true,
       "project": "Nanopore Reconstruction",
-      "run_name": "offline-high-bands-k262144-d32-hg002"
+      "run_name": "vq-s16-frozen"
     }
   },
   "optim": {

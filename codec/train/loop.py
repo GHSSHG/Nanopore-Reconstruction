@@ -50,6 +50,19 @@ def _temperature_guard(pause: float, resume: float, log: Callable[[str], None], 
     return time.perf_counter() - t0
 
 
+def _lr_schedule(peak: float, warmup_steps: int, kind: str, end_ratio: float, total_steps: int | None) -> Callable[[int], Any]:
+    """Linear warmup from 0 to `peak` over `warmup_steps`, then either constant or a cosine decay
+    that reaches peak * end_ratio at `total_steps` (train.max_steps)."""
+    warmup = max(1, int(warmup_steps))
+    if kind == "constant":
+        return optax.linear_schedule(0.0, float(peak), warmup)
+    if kind == "cosine":
+        if not total_steps or total_steps <= warmup:
+            raise ValueError("A cosine lr schedule needs train.max_steps (or --max-steps) above warmup_steps.")
+        return optax.warmup_cosine_decay_schedule(0.0, float(peak), warmup, int(total_steps), float(peak) * float(end_ratio))
+    raise ValueError(f"Unknown train.lr_schedule {kind!r}; use 'constant' or 'cosine'.")
+
+
 def train_model_from_pod5(
     ds: Pod5ChunkDataset,
     *,
@@ -58,6 +71,9 @@ def train_model_from_pod5(
     num_epochs: int,
     learning_rate: float,
     warmup_steps: int,
+    lr_schedule: str,
+    lr_end_ratio: float,
+    ema_decay: float,
     grad_clip: float,
     lr_multipliers: Dict[str, float],
     loss_weights: Dict[str, float],
@@ -96,12 +112,15 @@ def train_model_from_pod5(
     # Initialized on the first GPU (cuDNN attention has no CPU version), then kept on the host
     # until replication.
     model = build_audio_model(model_cfg)
+    lr = _lr_schedule(learning_rate, warmup_steps, lr_schedule, lr_end_ratio, max_steps_total)
+    _log(f"[setup] lr {lr_schedule}: peak {learning_rate:g}, warmup {warmup_steps} steps"
+         + (f", cosine to {learning_rate * lr_end_ratio:g} at step {max_steps_total}" if lr_schedule == "cosine" else "")
+         + f"; EMA decay {ema_decay:g}")
     state, _ = create_generator_state(
         jax.random.PRNGKey(seed),
         model,
         (1, ds.chunk_samples),
-        # Linear warmup from 0, then constant.
-        optax.linear_schedule(0.0, float(learning_rate), int(warmup_steps)) if warmup_steps > 0 else float(learning_rate),
+        lr,
         grad_clip=grad_clip,
         group_lrs=lr_multipliers,
     )
@@ -110,7 +129,7 @@ def train_model_from_pod5(
         state = flax_ckpt.restore_checkpoint(ckpt_dir=str(resume_from), target={"gen": state})["gen"]
         _log(f"[resume] restored {resume_from} (step={int(state.step)})")
     state = _host_broadcast(state, ndev)
-    train_step = make_train_step(loss_weights, stft_loss_scales, model.codebook_size)
+    train_step = make_train_step(loss_weights, stft_loss_scales, model.codebook_size, ema_decay)
 
     def _zero_counts():  # fresh buffers: the train step donates (reuses) the counts it is given
         return np.zeros((ndev, model.codebook_size), np.int32)
@@ -161,6 +180,7 @@ def train_model_from_pod5(
                     means = {k: float(np.mean([w[k][0] for w in host])) for k in host[0]}
                     # Codebook statistics over every code chosen in the window, all devices.
                     means.update(codebook_stats(jax.device_get(counts).sum(axis=0)))
+                    means["lr"] = float(lr(global_step))
                     elapsed = time.perf_counter() - window_start - paused
                     perf = {"step_ms": 1000.0 * elapsed / len(window), "data_wait_ms": 1000.0 * data_wait / len(window),
                             "paused_s": paused}

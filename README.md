@@ -83,7 +83,11 @@ forward pass; there is no `train` flag. It is trained as a classic VQ-VAE: gradi
 straight through the quantizer to the encoder, the SimVQ projection (`W`, `proj_bias`; the base
 codebook stays frozen) is trained by the codebook loss `||q - sg(z)||^2`, and the commitment loss
 `||z - sg(q)||^2` keeps the encoder output near its codewords (weights `train.loss_weights.vq_codebook`
-and `vq_commitment`, 1.0 and 0.25).
+and `vq_commitment`, 1.0 and 0.25). With `model.quantizer_l2_normalize`, z and every codeword are
+scaled to unit length before the search and the two losses (cosine-similarity VQ, as in ViT-VQGAN
+and DAC); without it nothing fixes their common scale, which kept growing during training.
+With `model.quantizer_learn_codebook`, the base codebook is trained as well (lr group
+`quantizer_codebook`) instead of staying frozen.
 
 Models trained by this code are run with the NanoRecon app. The weights released before this
 change (<https://huggingface.co/GHSSHG/NanoRecon>) were trained with noisy DiVeQ gradients
@@ -113,7 +117,8 @@ Nyquist); a term with weight 0 is not computed:
 ## Validation
 
 With `validation.enabled`, every checkpoint is validated in the background on GPU
-`validation.gpu` (shared with training): `validate.py` reconstructs the held-out POD5
+`validation.gpu` (shared with training; `null` = the GPU the training process runs on), with the
+EMA weights: `validate.py` reconstructs the held-out POD5
 `validation.source_pod5` from codewords, basecalls it with Dorado and reports the identity and
 empirical Q against `validation.truth_fastq` (overall and per flow cell), the ADC MAE, and per
 frequency band the amplitude of the correctly reconstructed part and the energy of the wrong part.
@@ -178,9 +183,14 @@ which is ignored by Git. Training refuses to start in a non-empty checkpoint dir
 ## Configuration Notes
 
 - `train.batch_size` is the global batch, split evenly over all visible GPUs (data parallel);
-  choose GPUs with `CUDA_VISIBLE_DEVICES`.
-- Learning rate: `train.learning_rate` (1e-4, as in SimVQ) is reached by a linear warmup over
-  `train.warmup_steps` steps and then held constant.
+  choose GPUs with `CUDA_VISIBLE_DEVICES` (one GPU per run lets four runs train side by side).
+- Training stops after `train.max_steps` steps (or `train.epochs` epochs, whichever comes first).
+- Learning rate: linear warmup from 0 to `train.learning_rate` over `train.warmup_steps` steps,
+  then `train.lr_schedule`: `constant`, or `cosine` decay to `learning_rate * train.lr_end_ratio`
+  at `train.max_steps`. The current value is logged as `lr`.
+- `train.ema_decay`: the checkpoints also hold an exponential moving average of the weights
+  (decay `min(ema_decay, (1 + step) / (10 + step))`), which validation uses; 0 makes it equal to
+  the weights.
 - Every `train.log_every_steps` steps the log reports the window means of the losses, the
   quantization distance `q_z_dist`, the mean latent and codeword norms (`z_norm`, `code_norm`,
   which should be of similar size), and the codebook perplexity and utilization over all codes

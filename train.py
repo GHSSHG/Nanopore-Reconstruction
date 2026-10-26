@@ -61,11 +61,13 @@ def _resolve_path(value: str, base: Path) -> Path:
 
 
 def _validation_launcher(cfg_path: Path, ckpt_dir: Path, vcfg: Dict[str, Any]):
-    """Callback that starts validate.py on GPU validation.gpu for each new checkpoint, in the
-    background (its own session, so stopping training leaves a running validation alone)."""
+    """Callback that starts validate.py for each new checkpoint, in the background (its own
+    session, so stopping training leaves a running validation alone), on GPU validation.gpu, or
+    with validation.gpu null on the GPU(s) this training process sees (CUDA_VISIBLE_DEVICES)."""
     if not vcfg.get("enabled", False):
         return None
     running: list[subprocess.Popen] = []
+    gpu = os.environ.get("CUDA_VISIBLE_DEVICES", "0").split(",")[0] if vcfg.get("gpu") is None else str(vcfg["gpu"])
 
     def launch(step: int, path: str) -> None:
         running[:] = [p for p in running if p.poll() is None]  # reap finished ones
@@ -75,14 +77,14 @@ def _validation_launcher(cfg_path: Path, ckpt_dir: Path, vcfg: Dict[str, Any]):
             running.append(
                 subprocess.Popen(
                     [sys.executable, str(_ROOT / "validate.py"), "--config", str(cfg_path), "--checkpoint", str(path), "--out", str(out)],
-                    env=dict(os.environ, CUDA_VISIBLE_DEVICES=str(vcfg.get("gpu", 0))),
+                    env=dict(os.environ, CUDA_VISIBLE_DEVICES=gpu),
                     stdin=subprocess.DEVNULL,
                     stdout=log,
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                 )
             )
-        print(f"[validation] step={step} started on GPU {vcfg.get('gpu', 0)}, results in {out}", flush=True)
+        print(f"[validation] step={step} started on GPU {gpu}, results in {out}", flush=True)
 
     return launch
 
@@ -145,6 +147,9 @@ def main() -> None:
             num_epochs=int(args.epochs or train_cfg.get("epochs", 1)),
             learning_rate=float(args.lr if args.lr is not None else train_cfg["learning_rate"]),
             warmup_steps=int(train_cfg.get("warmup_steps", 0)),
+            lr_schedule=str(train_cfg.get("lr_schedule", "constant")),
+            lr_end_ratio=float(train_cfg.get("lr_end_ratio", 0.0)),
+            ema_decay=float(train_cfg.get("ema_decay", 0.0)),
             grad_clip=float(train_cfg.get("grad_clip", 1.0)),
             lr_multipliers={str(k): float(v) for k, v in cfg.get("optim", {}).get("lr_multipliers", {}).items()},
             loss_weights=loss_weights,
@@ -155,7 +160,7 @@ def main() -> None:
             log_every_steps=int(args.log_every_steps or train_cfg.get("log_every_steps", 500)),
             checkpoint_every_steps=int(ckpt_cfg.get("every_steps", 10000)),
             prefetch_batches=int(train_cfg.get("prefetch_batches", 8)),
-            max_steps_total=args.max_steps,
+            max_steps_total=args.max_steps or train_cfg.get("max_steps"),
             max_steps_per_epoch=args.max_steps_per_epoch,
             wandb_logger=wandb_logger,
             on_checkpoint=_validation_launcher(cfg_path, ckpt_dir, cfg.get("validation", {})),

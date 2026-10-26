@@ -102,6 +102,10 @@ def nearest_codeword(z: jnp.ndarray, codebook: SearchCodebook) -> jnp.ndarray:
     return jnp.take_along_axis(firsts, best_tile[None, :], axis=0)[0, :num_rows]
 
 
+def _unit(x: jnp.ndarray) -> jnp.ndarray:
+    return x * jax.lax.rsqrt(jnp.sum(jnp.square(x), axis=-1, keepdims=True) + 1e-12)
+
+
 class SimVQ1D(nn.Module):
     """SimVQ quantizer for 1D latents (B, T, C), trained as a classic VQ-VAE.
 
@@ -109,24 +113,30 @@ class SimVQ1D(nn.Module):
     compute the same thing. Gradients pass straight through to z; the codebook projection is
     trained by the codebook loss ||q - sg(z)||^2 and the encoder is pulled toward its codewords
     by the commitment loss ||z - sg(q)||^2 (both returned in info, weighted in the train step).
+    With l2_normalize, z and every codeword are scaled to unit length first (cosine-similarity
+    search, as in ViT-VQGAN and DAC): nothing else fixes their scale, which otherwise drifts.
+    With learn_codebook, the base codebook is a trained parameter too (the codebook loss then
+    also moves the chosen codewords themselves); otherwise it stays frozen, as in SimVQ.
     """
 
     codebook_size: int
     code_dim: int
+    l2_normalize: bool = False
+    learn_codebook: bool = False
 
     def setup(self) -> None:
         embed_init = nn.initializers.normal(stddev=self.code_dim**-0.5)
-        # SimVQ keeps the base embeddings fixed and trains projection params to adapt latents.
-        self.codebook_var = self.variable(
-            "vq",
-            "codebook",
-            lambda: embed_init(self.make_rng("params"), (self.codebook_size, self.code_dim)).astype(F32),
-        )
+        shape = (self.codebook_size, self.code_dim)
+        if self.learn_codebook:
+            self.codebook = self.param("codebook", embed_init, shape, F32)
+        else:
+            # SimVQ keeps the base embeddings fixed and trains projection params to adapt latents.
+            self.codebook_var = self.variable("vq", "codebook", lambda: embed_init(self.make_rng("params"), shape).astype(F32))
         self.W = self.param("W", nn.initializers.orthogonal(), (self.code_dim, self.code_dim), F32)
         self.proj_bias = self.param("proj_bias", nn.initializers.zeros, (self.code_dim,), F32)
 
     def projected_codebook(self) -> jnp.ndarray:
-        emb = jax.lax.stop_gradient(self.codebook_var.value).astype(F32)
+        emb = self.codebook if self.learn_codebook else jax.lax.stop_gradient(self.codebook_var.value).astype(F32)
         return jnp.dot(emb, self.W) + self.proj_bias
 
     def __call__(self, z: jnp.ndarray) -> Tuple[jnp.ndarray, Dict[str, Any]]:
@@ -134,6 +144,10 @@ class SimVQ1D(nn.Module):
         if C != self.code_dim:
             raise ValueError(f"Latent dim {C} != code_dim {self.code_dim}")
         codebook = self.projected_codebook()  # (K, D)
+        z_norm = jnp.mean(jnp.linalg.norm(jax.lax.stop_gradient(z), axis=-1))
+        code_norm = jnp.mean(jnp.linalg.norm(jax.lax.stop_gradient(codebook), axis=-1))
+        if self.l2_normalize:
+            z, codebook = _unit(z), _unit(codebook)
         search = search_codebook(jax.lax.stop_gradient(codebook))
         indices = nearest_codeword(jax.lax.stop_gradient(z).reshape(B * T, C), search)
         quant = jnp.take(codebook, indices, axis=0).reshape(B, T, C)
@@ -147,7 +161,7 @@ class SimVQ1D(nn.Module):
             "vq_codebook_loss": jnp.mean(jnp.square(quant - jax.lax.stop_gradient(z))),
             "vq_commitment_loss": jnp.mean(jnp.square(z - jax.lax.stop_gradient(quant))),
             "q_z_dist": jnp.mean(dist),
-            "z_norm": jnp.mean(jnp.linalg.norm(jax.lax.stop_gradient(z), axis=-1)),
-            "code_norm": jnp.mean(jnp.linalg.norm(jax.lax.stop_gradient(codebook), axis=-1)),
+            "z_norm": z_norm,  # before the L2 normalization
+            "code_norm": code_norm,
         }
         return z_q, info

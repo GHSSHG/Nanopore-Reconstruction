@@ -21,6 +21,7 @@ _GENERATOR_LR_GROUPS = frozenset(
         "post_quant_conv",
         "quantizer_W",
         "quantizer_proj_bias",
+        "quantizer_codebook",
     }
 )
 
@@ -44,6 +45,7 @@ def _assert_frozen(tag, p):
 @struct.dataclass
 class GeneratorTrainState(train_state.TrainState):
     vq_vars: FrozenDict | None = None  # stores mutable "vq" collection
+    ema_params: FrozenDict | None = None  # exponential moving average of params (validation uses it)
 
     def apply_gradients(self, *, grads, vq_vars=None, **kwargs):
         grads = _force_frozen(grads)
@@ -74,6 +76,8 @@ def _generator_lr_group_for_path(path: str) -> str:
         return "quantizer_W"
     if path == "quantizer/proj_bias" or path.startswith("quantizer/proj_bias/"):
         return "quantizer_proj_bias"
+    if path == "quantizer/codebook":  # only with model.quantizer_learn_codebook
+        return "quantizer_codebook"
     return "default"
 
 
@@ -98,8 +102,6 @@ def create_generator_state(
     unknown_groups = sorted(set(group_lrs) - _GENERATOR_LR_GROUPS)
     if unknown_groups:
         raise ValueError(f"Unknown generator lr groups: {unknown_groups}")
-    if "codebook" in group_lrs:
-        raise ValueError("SimVQ codebook lives in mutable vq vars and is not optimized via params.")
 
     def _group_scale(group_name: str) -> float:
         return float(group_lrs.get(group_name, group_lrs.get("default", 1.0)))
@@ -128,6 +130,7 @@ def create_generator_state(
         params=params,
         tx=tx,
         vq_vars=vq_vars,
+        ema_params=params,
     )
     if isinstance(variables, FrozenDict):
         variables = variables.copy({"params": params})

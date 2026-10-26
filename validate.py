@@ -83,7 +83,8 @@ def reconstruct(model_cfg: dict, checkpoint: Path, reads: list, seg: int, hop: i
     """ADC signal reconstructed from the codewords, one array per read."""
     model = build_audio_model(model_cfg)
     gen = flax_ckpt.restore_checkpoint(str(checkpoint.resolve()), target=None)["gen"]
-    variables = jax.device_put({"params": gen["params"], "vq": gen["vq_vars"]}, jax.devices()[0])
+    params = gen["params"] if gen.get("ema_params") is None else gen["ema_params"]  # EMA weights when trained with them
+    variables = jax.device_put({"params": params, "vq": gen.get("vq_vars") or {}}, jax.devices()[0])  # no vq vars with a learned codebook
     forward = jax.jit(lambda v, x: model.apply(v, x)["wave_hat"])
 
     chunks, specs, acc = [], [], []
