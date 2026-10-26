@@ -1,0 +1,144 @@
+{
+  "seed": 42,
+  "train": {
+    "epochs": 10,
+    "max_steps": 160000,
+    "batch_size": 16,
+    "learning_rate": 0.0001,
+    "warmup_steps": 5000,
+    "lr_schedule": "cosine",
+    "lr_end_ratio": 0.1,
+    "ema_decay": 0.9999,
+    "grad_clip": 1.0,
+    "log_every_steps": 500,
+    "temp_every_steps": 20,
+    "temp_pause": 80,
+    "temp_resume": 72,
+    "prefetch_batches": 8,
+    "loss": {
+      "pa_l1_scale": 50.0
+    },
+    "loss_weights": {
+      "band_l1_0_500hz": 1.7,
+      "band_l1_500_1000hz": 2.0,
+      "band_l1_1000_2000hz": 3.5,
+      "band_l1_2000_2500hz": 0.0,
+      "stft_logmag_0_500hz": 0.05,
+      "stft_logmag_500_1000hz": 0.1,
+      "stft_logmag_1000_2000hz": 0.1,
+      "stft_logmag_2000_2500hz": 0.02,
+      "vq_codebook": 1.0,
+      "vq_commitment": 1.0
+    },
+    "stft_loss": {
+      "scales": [
+        {
+          "n_fft": 128,
+          "win_length": 128,
+          "hop_length": 16
+        },
+        {
+          "n_fft": 512,
+          "win_length": 512,
+          "hop_length": 128
+        },
+        {
+          "n_fft": 1024,
+          "win_length": 1024,
+          "hop_length": 256
+        }
+      ]
+    }
+  },
+  "model": {
+    "variant": "foundation_v1",
+    "enc_channels": [
+      32,
+      64,
+      128,
+      256
+    ],
+    "enc_down_strides": [
+      2,
+      2,
+      2
+    ],
+    "enc_stage_num_res_blocks": [
+      2,
+      2,
+      3
+    ],
+    "enc_kernel_size": 7,
+    "latent_dim": 256,
+    "quantizer_dim": 32,
+    "codebook_size": 262144,
+    "quantizer_l2_normalize": true,
+    "quantizer_learn_codebook": true,
+    "dec_channels": [
+      256
+    ],
+    "decoder_dim": 512,
+    "decoder_intermediate_dim": 1536,
+    "decoder_num_layers": 8,
+    "decoder_pos_net_enabled": true,
+    "decoder_pos_net_attention_heads": 8,
+    "decoder_pos_net_attention_backend": "jax_cudnn",
+    "istft_n_fft": 32,
+    "istft_hop_length": 8,
+    "latent_bilstm_layers": 2,
+    "latent_bilstm_hidden_dim": 128,
+    "cnn_compute_dtype": "fp32",
+    "param_dtype": "fp32",
+    "quant_conv_kernel_size": 7,
+    "post_quant_conv_kernel_size": 7
+  },
+  "data": {
+    "root": "${DATA_PATH}/hg002_giab2025.01/pod5",
+    "subdirs": [
+      "PAW70337/PAW70337_66b2eea5_de8117b1_115.pod5",
+      "PAW70337/PAW70337_66b2eea5_de8117b1_121.pod5",
+      "PAW70337/PAW70337_66b2eea5_de8117b1_123.pod5"
+    ],
+    "sample_rate": 5000,
+    "segment_samples": 8192,
+    "segment_hop_samples": 8192,
+    "pad_short_reads": true,
+    "min_read_length_for_pad": 6144,
+    "shuffle_buffer": 32768,
+    "files_in_flight": 8
+  },
+  "checkpoint": {
+    "root_dir": "checkpoints",
+    "resume_from": null,
+    "every_steps": 10000
+  },
+  "validation": {
+    "enabled": true,
+    "gpu": null,
+    "batch_size": 64,
+    "overlap_samples": 144,
+    "band_reads": 100,
+    "source_pod5": "tmp/hg002_valid/valid.pod5",
+    "truth_fastq": "tmp/hg002_valid/truth.fastq",
+    "truth_meta": "tmp/hg002_valid/truth_meta.jsonl",
+    "dorado_bin": "~/Download/dorado/dorado-1.4.0-linux-x64/bin/dorado",
+    "dorado_model": "~/Download/dorado/models/dna_r10.4.1_e8.2_400bps_sup@v5.2.0"
+  },
+  "logging": {
+    "wandb": {
+      "enabled": true,
+      "project": "Nanopore Reconstruction",
+      "run_name": "vq-s8-learned-hf"
+    }
+  },
+  "optim": {
+    "lr_multipliers": {
+      "encoder": 1.0,
+      "decoder": 1.0,
+      "quant_conv": 1.0,
+      "post_quant_conv": 1.0,
+      "quantizer_W": 1.0,
+      "quantizer_proj_bias": 1.0
+    }
+  }
+}
