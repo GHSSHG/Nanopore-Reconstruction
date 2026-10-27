@@ -85,10 +85,12 @@ def l1_time_loss(y: jnp.ndarray, y_hat: jnp.ndarray, *, valid_mask: jnp.ndarray 
     return _masked_mean_like(jnp.abs(y - y_hat), valid_mask)
 
 
-# Frequency bands (Hz) of the band losses: (low, high], the first band includes DC and the top
-# band ends at Nyquist. Together they cover the whole spectrum once.
+# Frequency bands (Hz) of the band losses: (low, high], a band from 0 includes DC and the top band
+# ends at Nyquist. 0-500 Hz can also be weighted as 0-200 + 200-500 Hz (older configs use 0_500hz).
 LOSS_BANDS = {
     "0_500hz": (0.0, 500.0),
+    "0_200hz": (0.0, 200.0),
+    "200_500hz": (200.0, 500.0),
     "500_1000hz": (500.0, 1000.0),
     "1000_2000hz": (1000.0, 2000.0),
     "2000_2500hz": (2000.0, 2500.0),

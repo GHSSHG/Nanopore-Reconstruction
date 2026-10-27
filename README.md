@@ -103,8 +103,8 @@ waveform (`istft_n_fft` 64, a 4x overlap).
 ## Losses
 
 `train.loss_weights` (reconstruction losses on chunks normalized to [-1, 1]), per frequency band
-`0_500hz`, `500_1000hz`, `1000_2000hz` and `2000_2500hz` (the first includes DC, the last ends at
-Nyquist); a term with weight 0 is not computed:
+`0_500hz` (or split as `0_200hz` + `200_500hz`), `500_1000hz`, `1000_2000hz` and `2000_2500hz`
+(bands from 0 include DC, the last ends at Nyquist); a term with weight 0 is not computed:
 
 - `band_l1_<band>`: time-domain L1 of the error's components in the band, in picoamps (error ×
   chunk half-range / `train.loss.pa_l1_scale`), so the waveform has to line up with the original.

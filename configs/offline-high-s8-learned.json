@@ -2,13 +2,13 @@
   "seed": 42,
   "train": {
     "epochs": 10,
-    "max_steps": 160000,
-    "batch_size": 16,
+    "max_steps": 80000,
+    "batch_size": 48,
     "learning_rate": 0.0001,
-    "warmup_steps": 5000,
+    "warmup_steps": 2500,
     "lr_schedule": "cosine",
     "lr_end_ratio": 0.1,
-    "ema_decay": 0.9999,
+    "ema_decay": 0.9998,
     "grad_clip": 1.0,
     "log_every_steps": 500,
     "temp_every_steps": 20,
@@ -19,14 +19,16 @@
       "pa_l1_scale": 50.0
     },
     "loss_weights": {
-      "band_l1_0_500hz": 1.7,
-      "band_l1_500_1000hz": 2.0,
+      "band_l1_0_200hz": 3.0,
+      "band_l1_200_500hz": 4.0,
+      "band_l1_500_1000hz": 2.5,
       "band_l1_1000_2000hz": 3.5,
-      "band_l1_2000_2500hz": 0.0,
-      "stft_logmag_0_500hz": 0.05,
+      "band_l1_2000_2500hz": 2.0,
+      "stft_logmag_0_200hz": 0.05,
+      "stft_logmag_200_500hz": 0.05,
       "stft_logmag_500_1000hz": 0.1,
       "stft_logmag_1000_2000hz": 0.1,
-      "stft_logmag_2000_2500hz": 0.02,
+      "stft_logmag_2000_2500hz": 0.05,
       "vq_codebook": 1.0,
       "vq_commitment": 1.0
     },
@@ -128,7 +130,7 @@
     "wandb": {
       "enabled": true,
       "project": "Nanopore Reconstruction",
-      "run_name": "vq-s8-learned-hf"
+      "run_name": "vq-s8-learned-lf"
     }
   },
   "optim": {
